@@ -1,0 +1,1346 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+//  📊 Gamma SPX [Pro v11] — Structure & Retracement Engine (Production)
+//
+//  CHANGELOG (v10 → v11):
+//    • Market structure module (swing detection, BOS/CHoCH, trend class)
+//    • Fibonacci retracement engine with confluence detection
+//    • Level test counter (rolling window)
+//    • Structure quality score (0–10)
+//    • Enhanced checklist items c11 (structure) + c12 (retrace)
+//    • Dedicated structure dashboard table
+//    • New alert types: BOS/CHoCH, Confirmed Retracement
+//    • All new features gated by toggles — backward compatible with v10
+// ═══════════════════════════════════════════════════════════════════════════
+indicator('📊 Gamma SPX [Pro v11]', overlay = true, max_labels_count = 500, max_lines_count = 500)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 1 — INPUTS                                                  ║
+// ║  Grouped by functional domain for logical organization.              ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── 1a. Key Gamma Levels ────────────────────────────────────────────────
+group_levels = 'KEY LEVELS'
+sup_low    = input.float(6800.00, '🔴 Major Put (Support Low)',      group = group_levels, tooltip = 'Lowest major support / put wall')
+sup_mid    = input.float(6850.00, '🛡️ Support Mid',                  group = group_levels, tooltip = 'Intermediate support')
+zero_gamma = input.float(6880.00, '🔵 Zero Gamma',                   group = group_levels, tooltip = 'Zero gamma pivot — directional inflection')
+res_mid    = input.float(6900.00, '🎯 Resistance Mid',               group = group_levels, tooltip = 'Intermediate resistance')
+res_high   = input.float(6950.00, '🟢 Major Call (Resistance High)', group = group_levels, tooltip = 'Highest major resistance / call wall')
+
+// ── 1b. Model Settings ─────────────────────────────────────────────────
+group_model = 'MODEL SETTINGS'
+profile_mode      = input.string('Balanced', '🎛️ Profile', options = ['Conservative', 'Balanced', 'Aggressive'], group = group_model, tooltip = 'Conservative = fewer signals, Aggressive = more')
+at_zero_threshold = input.float(2.0, 'At-Zero Threshold', minval = 0.1, step = 0.1, group = group_model, tooltip = 'Distance in points to treat price as at zero gamma')
+
+// ── 1c. Display Settings ───────────────────────────────────────────────
+group_display = 'DISPLAY SETTINGS'
+table_position            = input.string('top_right', '📍 Table Position', options = ['top_left', 'top_right', 'bottom_left', 'bottom_right', 'middle_left', 'middle_right'], group = group_display)
+show_recommendation_table = input.bool(true, '📊 Show Recommendation Table', group = group_display)
+update_mode               = input.string('realtime', 'Update Mode', options = ['realtime', 'on_new_bar'], group = group_display, tooltip = 'Realtime = tick-by-tick. On New Bar = confirmed close only')
+table_text_size           = input.string('normal', '🔠 Table Text Size', options = ['tiny', 'small', 'normal', 'large', 'huge'], group = group_display)
+
+// ── 1d. Theme ───────────────────────────────────────────────────────────
+group_theme = 'THEME'
+theme_mode = input.string('Dark', '🎨 Theme', options = ['Dark', 'Light'], group = group_theme, tooltip = 'Dark or Light mode for all dashboard elements')
+
+// ── 1e. Plot Levels ─────────────────────────────────────────────────────
+group_plot = 'PLOT LEVELS'
+show_sup_low             = input.bool(true, 'Show Major Put (Support Low)',       group = group_plot)
+show_sup_mid             = input.bool(true, 'Show Support Mid',                   group = group_plot)
+show_zero_gamma          = input.bool(true, 'Show Zero Gamma',                    group = group_plot)
+show_res_mid             = input.bool(true, 'Show Resistance Mid',                group = group_plot)
+show_res_high            = input.bool(true, 'Show Major Call (Resistance High)',  group = group_plot)
+show_trade_zones         = input.bool(true, 'Show Entry Zones',                   group = group_plot)
+show_targets             = input.bool(true, 'Show Targets',                       group = group_plot)
+show_price_text          = input.bool(true, 'Show Text Names on Levels',          group = group_plot)
+show_signal_marks        = input.bool(true, 'Show CALL/PUT Signal Marks',         group = group_plot)
+show_signals_on_close    = input.bool(true, '🔒 Signals Only On Bar Close',      group = group_plot)
+show_active_trade_levels = input.bool(true, 'Show Active Trade Levels',           group = group_plot)
+active_trade_line_width  = input.int(2, 'Active Trade Line Width', minval = 1, maxval = 4, group = group_plot)
+label_offset_bars        = input.int(2, 'Text Offset (Bars)',  minval = 0, maxval = 100, group = group_plot)
+plot_offset              = input.int(8, 'Plot Offset (Bars)',  minval = 0, maxval = 50,  group = group_plot)
+merge_ticks              = input.int(6, 'Merge overlap (ticks)', minval = 1, maxval = 50, group = group_plot)
+overlap_line_color       = input.color(color.new(#94A3B8, 0), 'Overlapped Lines Color', group = group_plot)
+text_offset_pts          = input.float(2.0, 'Vertical Text Offset (pts)', minval = 0.0, step = 0.5, group = group_plot, tooltip = 'Vertical point offset for label separation')
+
+// ── 1f. Entry / Exit Offsets ────────────────────────────────────────────
+group_offsets = 'ENTRY / EXIT OFFSETS'
+entry_zone_offset = input.float(5.0,  'Entry Zone Offset (pts)', minval = 0.5, step = 0.5, group = group_offsets, tooltip = 'Distance from key level to define entry zone edges')
+tp_extension      = input.float(20.0, 'TP Extension (pts)',      minval = 1.0, step = 1.0, group = group_offsets, tooltip = 'Extension beyond last key level for final TP')
+
+// ── 1g. Momentum Indicators ────────────────────────────────────────────
+group_momentum = 'MOMENTUM'
+rsi_len = input.int(14, 'RSI Length', minval = 2, group = group_momentum)
+cci_len = input.int(20, 'CCI Length', minval = 2, group = group_momentum)
+
+// ── 1h. Execution Rules ────────────────────────────────────────────────
+group_execution = 'EXECUTION RULES'
+confirm_tf           = input.string('15', 'Confirmation TF (min)', options = ['5', '15', '30', '60'], group = group_execution)
+use_confirmed_candle = input.bool(true, 'Use Confirmed Candle', group = group_execution, tooltip = 'Uses prior confirmed bar from higher TF to prevent repainting')
+score_call_min       = input.float(55.0, 'CALL Min Composite', minval = 0, maxval = 100, group = group_execution)
+score_put_max        = input.float(45.0, 'PUT Max Composite',  minval = 0, maxval = 100, group = group_execution)
+min_rr_required      = input.float(2.0,  'Min R:R', minval = 1.0, step = 0.1, group = group_execution)
+min_checks_medium    = input.int(6, 'Min Checks (Medium)', minval = 1, maxval = 10, group = group_execution)
+min_checks_strong    = input.int(8, 'Min Checks (Strong)', minval = 1, maxval = 10, group = group_execution)
+sl_buffer_points     = input.float(3.0, 'SL Buffer (pts)', minval = 0.5, step = 0.5, group = group_execution)
+min_body_mult        = input.int(3, 'Min Body (× mintick)', minval = 1, maxval = 50, group = group_execution, tooltip = 'Minimum candle body for pattern recognition — filters doji')
+
+// ── 1i. Volume Filter ───────────────────────────────────────────────────
+group_volume = 'VOLUME FILTER'
+vol_ma_len     = input.int(20,   'Volume MA Length',              minval = 5,   group = group_volume)
+vol_high_mult  = input.float(1.2, 'HIGH Volume Multiplier',      minval = 1.0, step = 0.1, group = group_volume)
+vol_vhigh_mult = input.float(1.8, 'VERY HIGH Volume Multiplier', minval = 1.1, step = 0.1, group = group_volume)
+
+// ── 1j. Market Structure ───────────────────────────────────────────────
+group_structure = 'MARKET STRUCTURE'
+enable_structure      = input.bool(true,  '📐 Enable Structure Analysis',   group = group_structure, tooltip = 'Swing detection, BOS/CHoCH, trend classification')
+swing_len             = input.int(5, 'Swing Detection Length',              minval = 2, maxval = 20, group = group_structure, tooltip = 'Bars left+right to confirm swing. Lower = more swings.')
+structure_lookback    = input.int(50, 'Structure Lookback (bars)',          minval = 10, maxval = 200, group = group_structure, tooltip = 'Rolling window for level test counting')
+show_swing_points     = input.bool(true,  'Show Swing Points',              group = group_structure)
+show_structure_breaks = input.bool(true,  'Show BOS/CHoCH Markers',         group = group_structure)
+show_structure_table  = input.bool(true,  'Show Structure Table',            group = group_structure)
+struct_table_position = input.string('bottom_left', '📍 Structure Table Position', options = ['top_left', 'top_right', 'bottom_left', 'bottom_right', 'middle_left', 'middle_right'], group = group_structure)
+
+// ── 1k. Retracement Analysis ───────────────────────────────────────────
+group_retrace = 'RETRACEMENT'
+enable_retracement = input.bool(true,  '📏 Enable Retracement Analysis', group = group_retrace, tooltip = 'Fibonacci levels, confluence detection')
+show_fib_lines     = input.bool(true,  'Show Fibonacci Lines',            group = group_retrace)
+show_fib_labels    = input.bool(true,  'Show Fibonacci Labels',           group = group_retrace)
+show_retrace_zone  = input.bool(true,  'Show Retrace Zone (38.2–61.8%)', group = group_retrace)
+retrace_proximity  = input.float(5.0,  'Level Proximity (pts)',            minval = 0.5, step = 0.5, group = group_retrace, tooltip = 'Distance to consider price at a fib or key level')
+fib_show_236       = input.bool(true,  '23.6% Fib', group = group_retrace)
+fib_show_382       = input.bool(true,  '38.2% Fib', group = group_retrace)
+fib_show_500       = input.bool(true,  '50.0% Fib', group = group_retrace)
+fib_show_618       = input.bool(true,  '61.8% Fib', group = group_retrace)
+fib_show_786       = input.bool(true,  '78.6% Fib', group = group_retrace)
+
+// ── 1l. Alerts ──────────────────────────────────────────────────────────
+group_alerts = 'ALERTS'
+enable_alerts         = input.bool(true, 'Enable Alerts',                  group = group_alerts)
+alert_frequency       = input.string('once_per_bar_close', 'Alert Frequency', options = ['all', 'once_per_bar', 'once_per_bar_close'], group = group_alerts)
+alert_cooldown_bars   = input.int(3, 'Alert Cooldown (bars)',              minval = 1, maxval = 500, group = group_alerts)
+alert_on_bias_change  = input.bool(true, 'Alert: Bias Change',            group = group_alerts)
+alert_on_zero_cross   = input.bool(true, 'Alert: Zero Gamma Cross',       group = group_alerts)
+alert_on_key_levels   = input.bool(true, 'Alert: Key Levels Cross',       group = group_alerts)
+alert_on_entry_zones  = input.bool(true, 'Alert: Entry Zones',            group = group_alerts)
+alert_on_targets      = input.bool(true, 'Alert: Targets Hit',            group = group_alerts)
+alert_on_trade_setups = input.bool(true, 'Alert: Trade Setups',           group = group_alerts)
+alert_on_retracement  = input.bool(true, 'Alert: Confirmed Retracement',  group = group_alerts, tooltip = 'Fires on structural retracement at key level')
+alert_on_structure    = input.bool(true, 'Alert: BOS/CHoCH Events',       group = group_alerts, tooltip = 'Fires on Break of Structure or Change of Character')
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 2 — UTILITY FUNCTIONS                                       ║
+// ║  Pure functions with no side effects. Declared at global scope.      ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// Validates that all five key levels are in ascending order.
+f_check_levels_validity() =>
+    sup_low < sup_mid and sup_mid < zero_gamma and zero_gamma < res_mid and res_mid < res_high
+
+// Maps string input to Pine position constant.
+f_get_position(pos) =>
+    switch pos
+        'top_left'     => position.top_left
+        'bottom_left'  => position.bottom_left
+        'bottom_right' => position.bottom_right
+        'middle_left'  => position.middle_left
+        'middle_right' => position.middle_right
+        => position.top_right
+
+// Maps string input to Pine size constant.
+f_get_size(s) =>
+    switch s
+        'tiny'  => size.tiny
+        'small' => size.small
+        'large' => size.large
+        'huge'  => size.huge
+        => size.normal
+
+// Returns true if two price levels are within merge_ticks of each other.
+f_levels_overlap(a, b) =>
+    math.abs(a - b) <= merge_ticks * syminfo.mintick
+
+// Clamps a value between lo and hi.
+f_clamp(val, lo, hi) =>
+    math.max(lo, math.min(val, hi))
+
+// Returns fallback if val is na, otherwise val.
+f_nz(val, fallback) =>
+    na(val) ? fallback : val
+
+// Sends an alert using the user-selected frequency. Returns true for type consistency.
+f_send_alert(_msg) =>
+    if alert_frequency == 'all'
+        alert(_msg, alert.freq_all)
+    else if alert_frequency == 'once_per_bar'
+        alert(_msg, alert.freq_once_per_bar)
+    else
+        alert(_msg, alert.freq_once_per_bar_close)
+    true
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 3 — THEME ENGINE                                            ║
+// ║  All theme-dependent colors defined here, toggled by is_dark.        ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+is_dark = theme_mode == 'Dark'
+
+// ── Table core colors ──
+tbl_bg        = is_dark ? color.new(#111827, 10) : color.new(#F9FAFB, 5)
+tbl_border    = is_dark ? color.new(#374151, 0)  : color.new(#D1D5DB, 0)
+tbl_header_bg = is_dark ? color.new(#1D4ED8, 0)  : color.new(#2563EB, 0)
+tbl_text      = is_dark ? color.new(#E5E7EB, 0)  : color.new(#1F2937, 0)
+tbl_muted     = is_dark ? color.new(#9CA3AF, 0)  : color.new(#6B7280, 0)
+
+// ── Semantic text colors ──
+tbl_bull_text = is_dark ? color.new(#34D399, 0) : color.new(#059669, 0)
+tbl_bear_text = is_dark ? color.new(#F87171, 0) : color.new(#DC2626, 0)
+tbl_zero_text = is_dark ? color.new(#60A5FA, 0) : color.new(#2563EB, 0)
+tbl_warn_text = is_dark ? color.new(#FBBF24, 0) : color.new(#D97706, 0)
+
+// ── Status cell backgrounds ──
+tbl_ok_bg     = is_dark ? color.new(#065F46, 35) : color.new(#D1FAE5, 20)
+tbl_bad_bg    = is_dark ? color.new(#7F1D1D, 35) : color.new(#FEE2E2, 20)
+tbl_strong_bg = is_dark ? color.new(#065F46, 20) : color.new(#A7F3D0, 15)
+tbl_medium_bg = is_dark ? color.new(#92400E, 20) : color.new(#FDE68A, 15)
+
+// ── Structure table header ──
+struct_hdr_bg = is_dark ? color.new(#4338CA, 0) : color.new(#6366F1, 0)
+
+// ── Label colors ──
+lbl_bg_clear       = color.new(color.white, 100)
+lbl_entry_bull_bg  = is_dark ? color.new(color.lime, 20)   : color.new(#059669, 15)
+lbl_entry_bear_bg  = is_dark ? color.new(color.orange, 20) : color.new(#D97706, 15)
+lbl_sl_bg          = is_dark ? color.new(color.red, 20)    : color.new(#DC2626, 15)
+lbl_tp_bg          = is_dark ? color.new(color.green, 20)  : color.new(#059669, 15)
+lbl_entry_text     = is_dark ? color.black : color.white
+lbl_sl_text        = color.white
+lbl_tp_text        = is_dark ? color.black : color.white
+
+// ── Fibonacci line colors (graded from subtle to prominent) ──
+fib_col_236 = is_dark ? color.new(#94A3B8, 40) : color.new(#64748B, 40)
+fib_col_382 = is_dark ? color.new(#60A5FA, 30) : color.new(#2563EB, 30)
+fib_col_500 = is_dark ? color.new(#A78BFA, 20) : color.new(#7C3AED, 20)
+fib_col_618 = is_dark ? color.new(#FBBF24, 10) : color.new(#D97706, 10)   // golden ratio — most visible
+fib_col_786 = is_dark ? color.new(#F87171, 20) : color.new(#DC2626, 20)
+retrace_zone_col = is_dark ? color.new(#A78BFA, 90) : color.new(#7C3AED, 92)
+
+// ── Level test count coloring ──
+// FIX: This function MUST be at global scope after theme vars are declared.
+// Pine v6 does not allow function definitions inside local `if` blocks.
+f_tc_col(count) =>
+    count >= 5 ? tbl_bear_text : count >= 3 ? tbl_warn_text : tbl_bull_text
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 4 — VALIDATION                                              ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+valid_order = f_check_levels_validity()
+
+// Entry zone boundaries (derived from key levels + offset)
+bull_entry_low  = zero_gamma + entry_zone_offset
+bull_entry_high = res_mid    - entry_zone_offset
+bear_entry_low  = sup_mid   + entry_zone_offset
+bear_entry_high = zero_gamma - entry_zone_offset
+
+valid_zones = bull_entry_low < bull_entry_high and bear_entry_low < bear_entry_high
+valid_setup = valid_order and valid_zones
+
+// Confirm TF ≥ chart TF (lower confirmation TF is meaningless)
+confirm_tf_sec = str.tonumber(confirm_tf) * 60
+chart_tf_sec   = timeframe.in_seconds()
+tf_is_valid    = not na(confirm_tf_sec) and confirm_tf_sec >= chart_tf_sec
+
+// Warning label (stored in var to prevent accumulation)
+var label lbl_warning = na
+if barstate.islast
+    if not na(lbl_warning)
+        label.delete(lbl_warning)
+    if not valid_order
+        lbl_warning := label.new(bar_index, high,
+             '⚠️ Level order invalid: SL < SM < ZG < RM < RH',
+             color = color.red, textcolor = color.white,
+             size = size.large, style = label.style_label_down)
+    else if not valid_zones
+        lbl_warning := label.new(bar_index, high,
+             '⚠️ Entry Zone Offset too large — zones overlap',
+             color = color.orange, textcolor = color.white,
+             size = size.large, style = label.style_label_down)
+    else if not tf_is_valid
+        lbl_warning := label.new(bar_index, high,
+             '⚠️ Confirm TF (' + confirm_tf + 'm) < chart TF',
+             color = color.yellow, textcolor = color.black,
+             size = size.normal, style = label.style_label_down)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 5 — CORE CALCULATIONS                                       ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── 5a. Price position relative to zero gamma ──
+distance_to_zero = close - zero_gamma
+above_zero       = close > zero_gamma
+below_zero       = close < zero_gamma
+at_zero          = math.abs(distance_to_zero) < at_zero_threshold
+
+// ── 5b. Target levels ──
+bull_tp1 = res_mid
+bull_tp2 = (res_mid + res_high) / 2
+bull_tp3 = res_high
+bull_tp4 = res_high + tp_extension
+bear_tp1 = sup_mid
+bear_tp2 = sup_low
+bear_tp3 = sup_low - tp_extension
+
+// ── 5c. Momentum indicators (na-safe) ──
+rsi_cur = f_nz(ta.rsi(close, rsi_len), 50.0)
+cci_cur = f_nz(ta.cci(hlc3, cci_len), 0.0)
+rsi_1h  = f_nz(request.security(syminfo.tickerid, '60', ta.rsi(close, rsi_len),
+             barmerge.gaps_off, barmerge.lookahead_off), 50.0)
+
+// ── 5d. Confirmation timeframe data (single consolidated security call) ──
+rsi_tf_expr = ta.rsi(close, rsi_len)
+cci_tf_expr = ta.cci(hlc3, cci_len)
+rsi_sec = use_confirmed_candle ? rsi_tf_expr[1] : rsi_tf_expr
+cci_sec = use_confirmed_candle ? cci_tf_expr[1] : cci_tf_expr
+cls_sec = use_confirmed_candle ? close[1] : close
+low_sec = use_confirmed_candle ? low[1]   : low
+hi_sec  = use_confirmed_candle ? high[1]  : high
+
+[rsi_tf_raw, cci_tf_raw, close_tf_raw, low_tf_raw, high_tf_raw] = request.security(
+     syminfo.tickerid, confirm_tf,
+     [rsi_sec, cci_sec, cls_sec, low_sec, hi_sec],
+     barmerge.gaps_off, barmerge.lookahead_off)
+
+rsi_tf   = f_nz(rsi_tf_raw, 50.0)
+cci_tf   = f_nz(cci_tf_raw, 0.0)
+close_tf = f_nz(close_tf_raw, close)
+low_tf   = f_nz(low_tf_raw, low)
+high_tf  = f_nz(high_tf_raw, high)
+
+// ── 5e. Composite score ──
+zg_score  = f_clamp(distance_to_zero / math.max(at_zero_threshold, syminfo.mintick) * 12.0, -20.0, 20.0)
+rsi_score = f_clamp((rsi_cur - 50.0) / 50.0 * 15.0, -15.0, 15.0)
+cci_score = f_clamp(cci_cur / 200.0 * 10.0, -10.0, 10.0)
+htf_score = f_clamp((rsi_1h - 50.0) / 50.0 * 10.0, -10.0, 10.0)
+composite_score = f_clamp(50.0 + zg_score + rsi_score + cci_score + htf_score, 0.0, 100.0)
+
+score_band = profile_mode == 'Conservative' ? 8.0 : profile_mode == 'Aggressive' ? 3.0 : 5.0
+final_rec  = not valid_setup   ? 'CHECK LEVELS' :
+              at_zero           ? 'WAIT'         :
+              composite_score >= 50.0 + score_band ? 'BULLISH BIAS' :
+              composite_score <= 50.0 - score_band ? 'BEARISH BIAS' : 'WAIT'
+
+// Bias background color (themed; CHECK LEVELS = purple for distinction)
+tbl_rec_bg = switch final_rec
+    'WAIT'         => is_dark ? color.new(#475569, 0) : color.new(#E2E8F0, 0)
+    'BULLISH BIAS' => is_dark ? color.new(#047857, 0) : color.new(#059669, 0)
+    'BEARISH BIAS' => is_dark ? color.new(#B91C1C, 0) : color.new(#DC2626, 0)
+    => is_dark ? color.new(#7C3AED, 0) : color.new(#8B5CF6, 0)
+
+// ── 5f. Volume analysis (na-safe) ──
+vol_raw     = f_nz(volume, 0.0)
+vol_ma_safe = math.max(f_nz(ta.sma(vol_raw, vol_ma_len), 1.0), 1.0)
+vol_ratio   = vol_raw / vol_ma_safe
+vol_state   = vol_ratio >= vol_vhigh_mult ? 'VERY HIGH' : vol_ratio >= vol_high_mult ? 'HIGH' : 'NORMAL'
+vol_is_high = vol_state == 'HIGH' or vol_state == 'VERY HIGH'
+
+// ── 5g. Candle patterns (body threshold filters doji) ──
+body             = math.abs(close - open)
+min_body         = syminfo.mintick * min_body_mult
+body_valid       = body > min_body
+upper_wick       = high - math.max(open, close)
+lower_wick       = math.min(open, close) - low
+is_hammer        = body_valid and lower_wick >= body * 2.0 and upper_wick <= body
+is_shooting_star = body_valid and upper_wick >= body * 2.0 and lower_wick <= body
+is_bull_engulf   = body_valid and close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
+is_bear_engulf   = body_valid and close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
+rsi_delta        = rsi_cur - rsi_1h
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 6 — MARKET STRUCTURE MODULE                                 ║
+// ║  Swing detection → HH/HL/LH/LL → BOS/CHoCH → level tests           ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── 6a. Swing point detection ──
+// ta.pivothigh/low returns non-na only when a confirmed pivot is found
+// (confirmed swing_len bars after the actual peak/trough).
+ph = enable_structure ? ta.pivothigh(high, swing_len, swing_len) : float(na)
+pl = enable_structure ? ta.pivotlow(low, swing_len, swing_len)   : float(na)
+
+// Persistent swing history (2 most recent of each type)
+var float last_sh     = na
+var float prev_sh     = na
+var int   last_sh_bar = na
+var int   prev_sh_bar = na
+var float last_sl     = na
+var float prev_sl     = na
+var int   last_sl_bar = na
+var int   prev_sl_bar = na
+
+sh_detected = not na(ph)
+sl_detected = not na(pl)
+
+if sh_detected
+    prev_sh     := last_sh
+    prev_sh_bar := last_sh_bar
+    last_sh     := ph
+    last_sh_bar := bar_index - swing_len   // actual bar of the swing
+
+if sl_detected
+    prev_sl     := last_sl
+    prev_sl_bar := last_sl_bar
+    last_sl     := pl
+    last_sl_bar := bar_index - swing_len
+
+// ── 6b. Structure classification (HH/HL/LH/LL) ──
+has_two_sh = not na(last_sh) and not na(prev_sh)
+has_two_sl = not na(last_sl) and not na(prev_sl)
+
+sh_is_hh = has_two_sh and last_sh > prev_sh    // Higher High
+sh_is_lh = has_two_sh and last_sh < prev_sh    // Lower High
+sl_is_hl = has_two_sl and last_sl > prev_sl    // Higher Low
+sl_is_ll = has_two_sl and last_sl < prev_sl    // Lower Low
+
+struct_bullish    = sh_is_hh and sl_is_hl       // Uptrend: HH + HL
+struct_bearish    = sh_is_lh and sl_is_ll       // Downtrend: LH + LL
+struct_transition = not struct_bullish and not struct_bearish
+
+struct_label = struct_bullish  ? 'BULLISH ↑'    :  struct_bearish  ? 'BEARISH ↓'    : 'TRANSITION ↔'
+
+// ── 6c. BOS / CHoCH detection ──
+// Only fire when NO new pivot is being detected this bar (stable structure).
+// BOS  = break in direction of existing trend (continuation)
+// CHoCH = break against existing trend (potential reversal)
+break_above_sh = not sh_detected and not na(last_sh) and close > last_sh and close[1] <= last_sh
+break_below_sl = not sl_detected and not na(last_sl) and close < last_sl and close[1] >= last_sl
+
+bos_bull   = break_above_sh and struct_bullish                                // continuation ↑
+bos_bear   = break_below_sl and struct_bearish                                // continuation ↓
+choch_bull = break_above_sh and (struct_bearish or struct_transition)          // reversal ↑
+choch_bear = break_below_sl and (struct_bullish or struct_transition)          // reversal ↓
+
+var string last_struct_event = 'NONE'
+var int    last_struct_bar   = 0
+var float  last_struct_price = na
+
+if enable_structure
+    if bos_bull
+        last_struct_event := 'BOS ↑'
+        last_struct_bar   := bar_index
+        last_struct_price := last_sh
+    if bos_bear
+        last_struct_event := 'BOS ↓'
+        last_struct_bar   := bar_index
+        last_struct_price := last_sl
+    if choch_bull
+        last_struct_event := 'CHoCH ↑'
+        last_struct_bar   := bar_index
+        last_struct_price := last_sh
+    if choch_bear
+        last_struct_event := 'CHoCH ↓'
+        last_struct_bar   := bar_index
+        last_struct_price := last_sl
+
+struct_event_age = bar_index - last_struct_bar
+
+// ── 6d. Level test counting (rolling window) ──
+// Counts new unique touches of each key level within `structure_lookback` bars.
+prox = retrace_proximity
+
+touch_sl_raw = low  <= sup_low    + prox and low  >= sup_low    - prox
+touch_sm_raw = low  <= sup_mid    + prox and high >= sup_mid    - prox
+touch_zg_raw = low  <= zero_gamma + prox and high >= zero_gamma - prox
+touch_rm_raw = high >= res_mid    - prox and low  <= res_mid    + prox
+touch_rh_raw = high >= res_high   - prox and low  <= res_high   + prox
+
+// Debounced: only count the first bar of each touch sequence
+new_touch_sl = touch_sl_raw and not touch_sl_raw[1]
+new_touch_sm = touch_sm_raw and not touch_sm_raw[1]
+new_touch_zg = touch_zg_raw and not touch_zg_raw[1]
+new_touch_rm = touch_rm_raw and not touch_rm_raw[1]
+new_touch_rh = touch_rh_raw and not touch_rh_raw[1]
+
+tc_sl = int(math.sum(new_touch_sl ? 1.0 : 0.0, structure_lookback))
+tc_sm = int(math.sum(new_touch_sm ? 1.0 : 0.0, structure_lookback))
+tc_zg = int(math.sum(new_touch_zg ? 1.0 : 0.0, structure_lookback))
+tc_rm = int(math.sum(new_touch_rm ? 1.0 : 0.0, structure_lookback))
+tc_rh = int(math.sum(new_touch_rh ? 1.0 : 0.0, structure_lookback))
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 7 — RETRACEMENT ANALYSIS MODULE                             ║
+// ║  Fibonacci levels, proximity checks, confluence, retrace signals     ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── 7a. Swing range and direction ──
+has_both_swings = not na(last_sh) and not na(last_sl) and not na(last_sh_bar) and not na(last_sl_bar)
+swing_range     = has_both_swings ? last_sh - last_sl : na
+range_valid     = not na(swing_range) and swing_range > syminfo.mintick * 10
+
+// Which swing was more recent determines retracement direction
+last_swing_is_high = has_both_swings and last_sh_bar > last_sl_bar
+
+// Retracement depth: 0 = at recent swing, 1 = full retrace to opposite swing
+retrace_pct = range_valid ?
+     (last_swing_is_high ? (last_sh - close) / swing_range : (close - last_sl) / swing_range) : na
+
+// ── 7b. Fibonacci levels ──
+fib_236 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.236 : last_sl + swing_range * 0.236) : na
+fib_382 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.382 : last_sl + swing_range * 0.382) : na
+fib_500 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.500 : last_sl + swing_range * 0.500) : na
+fib_618 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.618 : last_sl + swing_range * 0.618) : na
+fib_786 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.786 : last_sl + swing_range * 0.786) : na
+
+// Retrace zone: 38.2%–61.8% (the "golden pocket")
+retrace_zone_hi = range_valid ? (last_swing_is_high ? fib_382 : fib_618) : na
+retrace_zone_lo = range_valid ? (last_swing_is_high ? fib_618 : fib_382) : na
+
+// ── 7c. Proximity checks (fib and key levels) ──
+near_fib_236 = range_valid and math.abs(close - fib_236) < retrace_proximity
+near_fib_382 = range_valid and math.abs(close - fib_382) < retrace_proximity
+near_fib_500 = range_valid and math.abs(close - fib_500) < retrace_proximity
+near_fib_618 = range_valid and math.abs(close - fib_618) < retrace_proximity
+near_fib_786 = range_valid and math.abs(close - fib_786) < retrace_proximity
+at_any_fib   = near_fib_236 or near_fib_382 or near_fib_500 or near_fib_618 or near_fib_786
+
+// Priority order: 61.8 > 50.0 > 38.2 > 23.6 > 78.6 (by significance)
+nearest_fib_str = near_fib_618 ? '61.8%' :
+                   near_fib_500 ? '50.0%' :
+                   near_fib_382 ? '38.2%' :
+                   near_fib_236 ? '23.6%' :
+                   near_fib_786 ? '78.6%' : '-'
+
+near_sup_low_r    = math.abs(close - sup_low)    < retrace_proximity
+near_sup_mid_r    = math.abs(close - sup_mid)    < retrace_proximity
+near_zero_gamma_r = math.abs(close - zero_gamma) < retrace_proximity
+near_res_mid_r    = math.abs(close - res_mid)    < retrace_proximity
+near_res_high_r   = math.abs(close - res_high)   < retrace_proximity
+at_any_key_level  = near_sup_low_r or near_sup_mid_r or near_zero_gamma_r or near_res_mid_r or near_res_high_r
+
+nearest_key_str = near_zero_gamma_r ? 'Zero Gamma' :
+                   near_sup_mid_r    ? 'Sup Mid'    :
+                   near_res_mid_r    ? 'Res Mid'    :
+                   near_sup_low_r    ? 'Major Put'  :
+                   near_res_high_r   ? 'Major Call'  : '-'
+
+nearest_key_dist = near_zero_gamma_r ? math.abs(close - zero_gamma) :  near_sup_mid_r    ? math.abs(close - sup_mid)    :  near_res_mid_r    ? math.abs(close - res_mid)    :   near_sup_low_r    ? math.abs(close - sup_low)    :   near_res_high_r   ? math.abs(close - res_high)   : na
+
+// ── 7d. Confluence detection ──
+call_at_support   = near_sup_low_r or near_sup_mid_r or (near_zero_gamma_r and below_zero)
+put_at_resistance = near_res_mid_r or near_res_high_r or (near_zero_gamma_r and above_zero)
+has_confluence    = at_any_key_level and at_any_fib
+
+// ── 7e. Retracement signals ──
+// Fires when price is at a fib level + key level confluence + supportive structure
+retrace_call = enable_retracement and enable_structure and
+     last_swing_is_high and call_at_support and at_any_fib and
+     (struct_bullish or struct_transition) and
+     not na(retrace_pct) and retrace_pct >= 0.236 and retrace_pct <= 0.886
+
+retrace_put = enable_retracement and enable_structure and
+     not last_swing_is_high and put_at_resistance and at_any_fib and
+     (struct_bearish or struct_transition) and
+     not na(retrace_pct) and retrace_pct >= 0.236 and retrace_pct <= 0.886
+
+new_retrace_call = retrace_call and not retrace_call[1]
+new_retrace_put  = retrace_put  and not retrace_put[1]
+
+// ── 7f. Structure quality score (0–10) ──
+sq_trend = struct_bullish or struct_bearish ? 3.0 : struct_transition ? 1.0 : 0.0
+sq_event = last_struct_event != 'NONE' and struct_event_age < 20 ? 2.0 : 0.0
+sq_fib   = at_any_fib       ? 2.0 : 0.0
+sq_key   = at_any_key_level ? 2.0 : 0.0
+sq_confl = has_confluence    ? 1.0 : 0.0
+struct_quality = f_clamp(sq_trend + sq_event + sq_fib + sq_key + sq_confl, 0.0, 10.0)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 8 — SIGNAL LOGIC                                            ║
+// ║  Cross events, entry triggers, SL/TP, checklist, readiness gates    ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── 8a. Cross events ──
+x_call_r1   = ta.crossover(close, res_mid)
+x_call_r2   = ta.crossover(close, res_high)
+x_put_s2    = ta.crossunder(close, sup_mid)
+x_put_s1    = ta.crossunder(close, sup_low)
+x_zero_up   = ta.crossover(close, zero_gamma)
+x_zero_down = ta.crossunder(close, zero_gamma)
+x_sup_low   = ta.cross(close, sup_low)
+x_sup_mid   = ta.cross(close, sup_mid)
+x_res_mid   = ta.cross(close, res_mid)
+x_res_high  = ta.cross(close, res_high)
+
+h_bull_tp1 = ta.crossover(high, bull_tp1)
+h_bull_tp2 = ta.crossover(high, bull_tp2)
+h_bull_tp3 = ta.crossover(high, bull_tp3)
+h_bull_tp4 = ta.crossover(high, bull_tp4)
+h_bear_tp1 = ta.crossunder(low, bear_tp1)
+h_bear_tp2 = ta.crossunder(low, bear_tp2)
+h_bear_tp3 = ta.crossunder(low, bear_tp3)
+
+lowest_3  = ta.lowest(low, 3)
+highest_3 = ta.highest(high, 3)
+
+// ── 8b. Base conditions & TF confirmation ──
+call_base = above_zero and composite_score > score_call_min and final_rec == 'BULLISH BIAS'
+put_base  = below_zero and composite_score < score_put_max  and final_rec == 'BEARISH BIAS'
+
+call_tf_confirm = rsi_tf > 50 and rsi_1h > 50 and cci_tf > 0 and close_tf > zero_gamma
+put_tf_confirm  = rsi_tf < 50 and rsi_1h < 50 and cci_tf < 0 and close_tf < zero_gamma
+
+// ── 8c. Entry triggers ──
+// Breakout (requires directional base + volume + RSI momentum)
+call_break_r1       = x_call_r1 and close > res_mid  and close_tf > res_mid
+call_break_r2       = x_call_r2 and close > res_high and close_tf > res_high
+call_entry_breakout = (call_break_r1 or call_break_r2) and vol_is_high and rsi_delta > 0
+
+put_break_s2        = x_put_s2 and close < sup_mid and close_tf < sup_mid
+put_break_s1        = x_put_s1 and close < sup_low  and close_tf < sup_low
+put_entry_breakdown = (put_break_s2 or put_break_s1) and vol_is_high and rsi_delta < 0
+
+// Bounce / Rejection (not gated by directional base — allows counter-trend)
+call_touch_support   = low <= sup_mid or low <= sup_low
+call_support_hold_tf = low_tf > sup_low
+call_entry_bounce    = call_touch_support and (is_hammer or is_bull_engulf) and  call_support_hold_tf and rsi_cur[1] < 30 and rsi_cur > rsi_cur[1] and composite_score > composite_score[1]
+
+put_touch_res    = high >= res_mid or high >= res_high
+put_res_hold_tf  = high_tf < res_high
+put_entry_bounce = put_touch_res and (is_shooting_star or is_bear_engulf) and  put_res_hold_tf and rsi_cur[1] > 70 and rsi_cur < rsi_cur[1] and composite_score < composite_score[1]
+
+// Zero-gamma cross (bias flip required)
+call_entry_zero = close[1] < zero_gamma and close > zero_gamma and close_tf > zero_gamma and  composite_score > 50 and final_rec[1] == 'BEARISH BIAS' and final_rec == 'BULLISH BIAS'
+put_entry_zero  = close[1] > zero_gamma and close < zero_gamma and close_tf < zero_gamma and composite_score < 50 and final_rec[1] == 'BULLISH BIAS' and final_rec == 'BEARISH BIAS'
+
+call_entry_any = call_entry_breakout or call_entry_bounce or call_entry_zero
+put_entry_any  = put_entry_breakdown or put_entry_bounce or put_entry_zero
+
+// ── 8d. Dynamic SL / TP ──
+call_sl_dyn = call_entry_breakout ? (lowest_3 - sl_buffer_points) : call_entry_bounce  ? (math.min(sup_low, sup_mid) - sl_buffer_points) : (zero_gamma - sl_buffer_points)
+call_tp_dyn = call_entry_breakout ? (close > res_mid ? res_high : bull_tp3) : call_entry_bounce  ? zero_gamma : res_mid
+
+put_sl_dyn = put_entry_breakdown ? (highest_3 + sl_buffer_points) :  put_entry_bounce   ? (math.max(res_high, res_mid) + sl_buffer_points) : (zero_gamma + sl_buffer_points)
+put_tp_dyn = put_entry_breakdown ? (close < sup_mid ? sup_low : bear_tp2) : put_entry_bounce   ? zero_gamma : sup_mid
+
+// R:R — requires positive risk AND positive reward
+call_risk   = close - call_sl_dyn
+call_reward = call_tp_dyn - close
+call_rr_ok  = call_risk > syminfo.mintick and call_reward > syminfo.mintick
+call_rr_dyn = call_rr_ok ? call_reward / call_risk : 0.0
+
+put_risk    = put_sl_dyn - close
+put_reward  = close - put_tp_dyn
+put_rr_ok   = put_risk > syminfo.mintick and put_reward > syminfo.mintick
+put_rr_dyn  = put_rr_ok ? put_reward / put_risk : 0.0
+
+// ── 8e. Enhanced checklist (c1–c10 original + c11–c12 structure) ──
+// c1:  Above/Below zero gamma           (1.0)
+// c2:  Composite score threshold         (1.0)
+// c3:  Bias matches direction            (1.0)
+// c4:  Current RSI direction             (1.0)
+// c5:  Hourly RSI direction              (1.0)
+// c6:  Valid setup                       (2.0)
+// c7:  TF confirmation aligned           (1.0)
+// c8:  Volume is high                    (1.5)
+// c9:  SL is on correct side of price    (1.0)
+// c10: R:R meets minimum                 (1.0)
+// c11: Structure alignment (NEW)         (0–1.5)
+// c12: Retrace confluence (NEW)          (0–1.0)
+// Max possible: 14.0
+
+call_c1  = above_zero ? 1.0 : 0.0
+call_c2  = composite_score > score_call_min ? 1.0 : 0.0
+call_c3  = final_rec == 'BULLISH BIAS' ? 1.0 : 0.0
+call_c4  = rsi_cur > 50 ? 1.0 : 0.0
+call_c5  = rsi_1h  > 50 ? 1.0 : 0.0
+call_c6  = valid_setup   ? 2.0 : 0.0
+call_c7  = call_tf_confirm ? 1.0 : 0.0
+call_c8  = vol_is_high     ? 1.5 : 0.0
+call_c9  = call_sl_dyn < close ? 1.0 : 0.0
+call_c10 = call_rr_dyn >= min_rr_required ? 1.0 : 0.0
+call_c11 = enable_structure    ? (struct_bullish ? 1.5 : struct_transition and above_zero ? 0.5 : 0.0) : 0.0
+call_c12 = enable_retracement  ? (retrace_call ? 1.0 : 0.0) : 0.0
+call_checks = call_c1 + call_c2 + call_c3 + call_c4 + call_c5 + call_c6 + call_c7 + call_c8 + call_c9 + call_c10 + call_c11 + call_c12
+
+put_c1  = below_zero ? 1.0 : 0.0
+put_c2  = composite_score < score_put_max ? 1.0 : 0.0
+put_c3  = final_rec == 'BEARISH BIAS' ? 1.0 : 0.0
+put_c4  = rsi_cur < 50 ? 1.0 : 0.0
+put_c5  = rsi_1h  < 50 ? 1.0 : 0.0
+put_c6  = valid_setup    ? 2.0 : 0.0
+put_c7  = put_tf_confirm  ? 1.0 : 0.0
+put_c8  = vol_is_high      ? 1.5 : 0.0
+put_c9  = put_sl_dyn > close ? 1.0 : 0.0
+put_c10 = put_rr_dyn >= min_rr_required ? 1.0 : 0.0
+put_c11 = enable_structure    ? (struct_bearish ? 1.5 : struct_transition and below_zero ? 0.5 : 0.0) : 0.0
+put_c12 = enable_retracement  ? (retrace_put ? 1.0 : 0.0) : 0.0
+put_checks = put_c1 + put_c2 + put_c3 + put_c4 + put_c5 + put_c6 + put_c7 + put_c8 + put_c9 + put_c10 + put_c11 + put_c12
+
+// ── 8f. Quality classification ──
+call_quality = call_checks >= (min_checks_strong + 1.5) ? 'STRONG' : call_checks >= (min_checks_medium + 0.5) ? 'MEDIUM' : 'WEAK'
+put_quality  = put_checks >= (min_checks_strong + 1.5) ? 'STRONG' : put_checks >= (min_checks_medium + 0.5) ? 'MEDIUM' : 'WEAK'
+
+entry_type_call = call_entry_breakout ? 'Breakout' : call_entry_bounce ? 'Bounce' : 'ZeroCross'
+entry_type_put  = put_entry_breakdown ? 'Breakdown' : put_entry_bounce ? 'Rejection' : 'ZeroCross'
+
+// Structure confirmation suffix (✓ added when structure supports)
+struct_conf_call = enable_structure and (call_c11 > 0 or call_c12 > 0)
+struct_conf_put  = enable_structure and (put_c11 > 0 or put_c12 > 0)
+call_quality_str = call_quality + (struct_conf_call ? ' ✓' : '')
+put_quality_str  = put_quality  + (struct_conf_put  ? ' ✓' : '')
+
+// ── 8g. Readiness gates (mutual exclusion: CALL priority) ──
+med_threshold = min_checks_medium + 0.5
+
+call_ready = ((call_base and (call_entry_breakout or call_entry_zero) and call_checks >= med_threshold) or
+               (call_entry_bounce and valid_setup and composite_score > 40.0 and call_checks >= med_threshold))
+              and call_rr_dyn >= min_rr_required
+
+put_ready = ((put_base and (put_entry_breakdown or put_entry_zero) and put_checks >= med_threshold) or
+              (put_entry_bounce and valid_setup and composite_score < 60.0 and put_checks >= med_threshold))
+             and put_rr_dyn >= min_rr_required and not call_ready
+
+signal_text     = call_ready ? ('CALL ' + call_quality_str) : put_ready ? ('PUT ' + put_quality_str) : 'NO SIGNAL'
+new_call_signal = call_ready and not call_ready[1]
+new_put_signal  = put_ready  and not put_ready[1]
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 9 — VISUALIZATION: COLORS & PLOTS                          ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── 9a. Level colors ──
+col_sup_low  = color.new(color.red, 0)
+col_sup_mid  = color.new(color.orange, 0)
+col_zero     = color.new(color.blue, 0)
+col_res_mid  = is_dark ? color.new(color.yellow, 0) : color.new(#B45309, 0)  // yellow invisible on light bg
+col_res_high = color.new(color.green, 0)
+col_bull     = color.new(color.lime, 0)
+col_bear     = color.new(color.red, 0)
+
+// Overlap detection (merge nearby levels visually)
+ol_sup_low  = f_levels_overlap(sup_low, sup_mid)   or f_levels_overlap(sup_low, zero_gamma)
+ol_sup_mid  = f_levels_overlap(sup_mid, sup_low)   or f_levels_overlap(sup_mid, zero_gamma)
+ol_zero     = f_levels_overlap(zero_gamma, sup_mid) or f_levels_overlap(zero_gamma, res_mid)
+ol_res_mid  = f_levels_overlap(res_mid, zero_gamma) or f_levels_overlap(res_mid, res_high)
+ol_res_high = f_levels_overlap(res_high, res_mid)
+
+plot_col_sup_low  = ol_sup_low  ? overlap_line_color : col_sup_low
+plot_col_sup_mid  = ol_sup_mid  ? overlap_line_color : col_sup_mid
+plot_col_zero     = ol_zero     ? overlap_line_color : col_zero
+plot_col_res_mid  = ol_res_mid  ? overlap_line_color : col_res_mid
+plot_col_res_high = ol_res_high ? overlap_line_color : col_res_high
+
+// ── 9b. Key level plots ──
+plot(show_sup_low    ? sup_low    : na, title = 'Major Put',      color = plot_col_sup_low,  linewidth = 2, offset = plot_offset)
+plot(show_sup_mid    ? sup_mid    : na, title = 'Support Mid',    color = plot_col_sup_mid,  linewidth = 2, offset = plot_offset)
+plot(show_zero_gamma ? zero_gamma : na, title = 'Zero Gamma',     color = plot_col_zero,     linewidth = 2, offset = plot_offset)
+plot(show_res_mid    ? res_mid    : na, title = 'Resistance Mid', color = plot_col_res_mid,  linewidth = 2, offset = plot_offset)
+plot(show_res_high   ? res_high   : na, title = 'Major Call',     color = plot_col_res_high, linewidth = 2, offset = plot_offset)
+
+// Target plots
+plot(show_targets ? bull_tp2 : na, title = 'Bull TP2', color = color.new(color.green, 40), linewidth = 1, style = plot.style_cross, offset = plot_offset)
+plot(show_targets ? bull_tp4 : na, title = 'Bull TP4', color = color.new(color.green, 20), linewidth = 1, style = plot.style_cross, offset = plot_offset)
+plot(show_targets ? bear_tp3 : na, title = 'Bear TP3', color = color.new(color.red,   20), linewidth = 1, style = plot.style_cross, offset = plot_offset)
+
+// Entry zone fills
+p_bull_lo = plot(show_trade_zones ? bull_entry_low  : na, title = 'Bull Entry Low',  color = col_bull, linewidth = 1, offset = plot_offset)
+p_bull_hi = plot(show_trade_zones ? bull_entry_high : na, title = 'Bull Entry High', color = col_bull, linewidth = 1, offset = plot_offset)
+fill(p_bull_lo, p_bull_hi, color = color.new(col_bull, 88), title = 'Bull Entry Zone')
+
+p_bear_lo = plot(show_trade_zones ? bear_entry_low  : na, title = 'Bear Entry Low',  color = col_bear, linewidth = 1, offset = plot_offset)
+p_bear_hi = plot(show_trade_zones ? bear_entry_high : na, title = 'Bear Entry High', color = col_bear, linewidth = 1, offset = plot_offset)
+fill(p_bear_lo, p_bear_hi, color = color.new(col_bear, 88), title = 'Bear Entry Zone')
+
+// ── 9c. Retracement zone fill (golden pocket) ──
+show_rz = enable_retracement and show_retrace_zone and range_valid
+p_rz_hi = plot(show_rz ? retrace_zone_hi : na, title = 'Retrace Zone Hi', color = color.new(color.purple, 80), linewidth = 1, display = display.none)
+p_rz_lo = plot(show_rz ? retrace_zone_lo : na, title = 'Retrace Zone Lo', color = color.new(color.purple, 80), linewidth = 1, display = display.none)
+fill(p_rz_hi, p_rz_lo, color = retrace_zone_col, title = 'Retrace Zone (38.2–61.8%)')
+
+// ── 9d. Signal marks ──
+signal_ok = show_signal_marks and (show_signals_on_close ? barstate.isconfirmed : true)
+
+plotshape(signal_ok and new_call_signal and call_quality == 'STRONG',
+     title = 'CALL STRONG', style = shape.labelup, location = location.belowbar,
+     color = color.new(color.green, 0), text = 'CALL ✅', textcolor = color.black, size = size.tiny)
+plotshape(signal_ok and new_call_signal and call_quality != 'STRONG',
+     title = 'CALL MED', style = shape.labelup, location = location.belowbar,
+     color = color.new(color.lime, 0), text = 'CALL ⚠', textcolor = color.black, size = size.tiny)
+plotshape(signal_ok and new_put_signal and put_quality == 'STRONG',
+     title = 'PUT STRONG', style = shape.labeldown, location = location.abovebar,
+     color = color.new(color.red, 0), text = 'PUT ✅', textcolor = color.white, size = size.tiny)
+plotshape(signal_ok and new_put_signal and put_quality != 'STRONG',
+     title = 'PUT MED', style = shape.labeldown, location = location.abovebar,
+     color = color.new(color.orange, 0), text = 'PUT ⚠', textcolor = color.white, size = size.tiny)
+
+// ── 9e. Structure marks (swing points, BOS, CHoCH) ──
+plotshape(enable_structure and show_swing_points and sh_detected,
+     title = 'Swing High', style = shape.triangledown, location = location.abovebar,
+     color = col_bear, size = size.tiny, offset = -swing_len)
+plotshape(enable_structure and show_swing_points and sl_detected,
+     title = 'Swing Low', style = shape.triangleup, location = location.belowbar,
+     color = col_bull, size = size.tiny, offset = -swing_len)
+
+plotshape(enable_structure and show_structure_breaks and bos_bull,
+     title = 'BOS ↑', style = shape.diamond, location = location.belowbar,
+     color = color.new(color.green, 0), text = 'BOS', textcolor = color.green, size = size.tiny)
+plotshape(enable_structure and show_structure_breaks and bos_bear,
+     title = 'BOS ↓', style = shape.diamond, location = location.abovebar,
+     color = color.new(color.red, 0), text = 'BOS', textcolor = color.red, size = size.tiny)
+plotshape(enable_structure and show_structure_breaks and choch_bull,
+     title = 'CHoCH ↑', style = shape.diamond, location = location.belowbar,
+     color = color.new(#FBBF24, 0), text = 'CHoCH', textcolor = color.new(#FBBF24, 0), size = size.tiny)
+plotshape(enable_structure and show_structure_breaks and choch_bear,
+     title = 'CHoCH ↓', style = shape.diamond, location = location.abovebar,
+     color = color.new(#FBBF24, 0), text = 'CHoCH', textcolor = color.new(#FBBF24, 0), size = size.tiny)
+
+// ── 9f. Retracement confirmation marks ──
+plotshape(enable_retracement and new_retrace_call and signal_ok,
+     title = 'Retrace Call', style = shape.circle, location = location.belowbar,
+     color = color.new(#A78BFA, 0), text = 'RET', textcolor = color.new(#A78BFA, 0), size = size.tiny)
+plotshape(enable_retracement and new_retrace_put and signal_ok,
+     title = 'Retrace Put', style = shape.circle, location = location.abovebar,
+     color = color.new(#F472B6, 0), text = 'RET', textcolor = color.new(#F472B6, 0), size = size.tiny)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 10 — LABELS (Key Levels, Fibs, Active Trade)                ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── 10a. Key level + target + entry zone labels ──
+var label lbl_p_sl  = na, var label lbl_p_sm  = na, var label lbl_p_zg  = na
+var label lbl_p_rm  = na, var label lbl_p_rh  = na
+var label lbl_tp2   = na, var label lbl_tp4   = na, var label lbl_bear3 = na
+var label lbl_bullL = na, var label lbl_bullH = na
+var label lbl_bearL = na, var label lbl_bearH = na
+
+if barstate.islast and show_price_text
+    lbl_x = bar_index + label_offset_bars
+    v     = text_offset_pts
+
+    // Clean up previous iteration
+    if not na(lbl_p_sl)
+        label.delete(lbl_p_sl)
+    if not na(lbl_p_sm)
+        label.delete(lbl_p_sm)
+    if not na(lbl_p_zg)
+        label.delete(lbl_p_zg)
+    if not na(lbl_p_rm)
+        label.delete(lbl_p_rm)
+    if not na(lbl_p_rh)
+        label.delete(lbl_p_rh)
+    if not na(lbl_tp2)
+        label.delete(lbl_tp2)
+    if not na(lbl_tp4)
+        label.delete(lbl_tp4)
+    if not na(lbl_bear3)
+        label.delete(lbl_bear3)
+    if not na(lbl_bullL)
+        label.delete(lbl_bullL)
+    if not na(lbl_bullH)
+        label.delete(lbl_bullH)
+    if not na(lbl_bearL)
+        label.delete(lbl_bearL)
+    if not na(lbl_bearH)
+        label.delete(lbl_bearH)
+
+    // Supports offset down, resistances offset up (labels pushed away from price)
+    if show_sup_low
+        lbl_p_sl := label.new(lbl_x, sup_low - v, 'Major Put ' + str.tostring(sup_low, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_sup_low, size = size.normal)
+    if show_sup_mid
+        lbl_p_sm := label.new(lbl_x, sup_mid - v, 'Support Mid ' + str.tostring(sup_mid, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_sup_mid, size = size.normal)
+    if show_zero_gamma
+        lbl_p_zg := label.new(lbl_x, zero_gamma + v, 'Zero Gamma ' + str.tostring(zero_gamma, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_zero, size = size.normal)
+    if show_res_mid
+        lbl_p_rm := label.new(lbl_x, res_mid + v, 'Res Mid ' + str.tostring(res_mid, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_res_mid, size = size.normal)
+    if show_res_high
+        lbl_p_rh := label.new(lbl_x, res_high + v, 'Major Call ' + str.tostring(res_high, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_res_high, size = size.normal)
+
+    if show_targets
+        lbl_tp2   := label.new(lbl_x, bull_tp2 + v, 'TP2 ' + str.tostring(bull_tp2, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = tbl_bull_text, size = size.small)
+        lbl_tp4   := label.new(lbl_x, bull_tp4 + v, 'TP4 ' + str.tostring(bull_tp4, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = tbl_bull_text, size = size.small)
+        lbl_bear3 := label.new(lbl_x, bear_tp3 - v, 'TP3 ' + str.tostring(bear_tp3, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = tbl_bear_text, size = size.small)
+
+    if show_trade_zones
+        lbl_bullL := label.new(lbl_x, bull_entry_low - v, 'Bull Lo ' + str.tostring(bull_entry_low, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_bull, size = size.small)
+        lbl_bullH := label.new(lbl_x, bull_entry_high + v, 'Bull Hi ' + str.tostring(bull_entry_high, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_bull, size = size.small)
+        lbl_bearL := label.new(lbl_x, bear_entry_low - v, 'Bear Lo ' + str.tostring(bear_entry_low, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_bear, size = size.small)
+        lbl_bearH := label.new(lbl_x, bear_entry_high + v, 'Bear Hi ' + str.tostring(bear_entry_high, '#.##'),
+             xloc = xloc.bar_index, style = label.style_label_left,
+             color = lbl_bg_clear, textcolor = col_bear, size = size.small)
+
+// ── 10b. Fibonacci level lines + labels (last bar only) ──
+var line  ln_f236 = na, var line  ln_f382 = na, var line  ln_f500 = na
+var line  ln_f618 = na, var line  ln_f786 = na
+var label lb_f236 = na, var label lb_f382 = na, var label lb_f500 = na
+var label lb_f618 = na, var label lb_f786 = na
+
+if barstate.islast and enable_retracement and show_fib_lines and range_valid
+    // Cleanup previous
+    if not na(ln_f236)
+        line.delete(ln_f236)
+    if not na(ln_f382)
+        line.delete(ln_f382)
+    if not na(ln_f500)
+        line.delete(ln_f500)
+    if not na(ln_f618)
+        line.delete(ln_f618)
+    if not na(ln_f786)
+        line.delete(ln_f786)
+    if not na(lb_f236)
+        label.delete(lb_f236)
+    if not na(lb_f382)
+        label.delete(lb_f382)
+    if not na(lb_f500)
+        label.delete(lb_f500)
+    if not na(lb_f618)
+        label.delete(lb_f618)
+    if not na(lb_f786)
+        label.delete(lb_f786)
+
+    // Line spans from older swing bar to right of current bar
+    older_bar = math.min(nz(last_sh_bar, bar_index - 50), nz(last_sl_bar, bar_index - 50))
+    end_bar   = bar_index + 3
+    lbl_bar_f = bar_index + label_offset_bars + 4
+
+    if fib_show_236
+        ln_f236 := line.new(older_bar, fib_236, end_bar, fib_236,
+             color = fib_col_236, width = 1, style = line.style_dotted)
+        if show_fib_labels
+            lb_f236 := label.new(lbl_bar_f, fib_236, '23.6% ' + str.tostring(fib_236, '#.#'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = fib_col_236, size = size.tiny)
+    if fib_show_382
+        ln_f382 := line.new(older_bar, fib_382, end_bar, fib_382,
+             color = fib_col_382, width = 1, style = line.style_dotted)
+        if show_fib_labels
+            lb_f382 := label.new(lbl_bar_f, fib_382, '38.2% ' + str.tostring(fib_382, '#.#'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = fib_col_382, size = size.tiny)
+    if fib_show_500
+        ln_f500 := line.new(older_bar, fib_500, end_bar, fib_500,
+             color = fib_col_500, width = 1, style = line.style_dashed)
+        if show_fib_labels
+            lb_f500 := label.new(lbl_bar_f, fib_500, '50.0% ' + str.tostring(fib_500, '#.#'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = fib_col_500, size = size.tiny)
+    if fib_show_618
+        ln_f618 := line.new(older_bar, fib_618, end_bar, fib_618,
+             color = fib_col_618, width = 2, style = line.style_dashed)  // thicker = golden ratio
+        if show_fib_labels
+            lb_f618 := label.new(lbl_bar_f, fib_618, '61.8% ' + str.tostring(fib_618, '#.#'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = fib_col_618, size = size.tiny)
+    if fib_show_786
+        ln_f786 := line.new(older_bar, fib_786, end_bar, fib_786,
+             color = fib_col_786, width = 1, style = line.style_dotted)
+        if show_fib_labels
+            lb_f786 := label.new(lbl_bar_f, fib_786, '78.6% ' + str.tostring(fib_786, '#.#'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = fib_col_786, size = size.tiny)
+
+// ── 10c. Active trade levels (Entry / SL / TP lines and labels) ──
+var line  line_entry = na, var line  line_sl = na, var line  line_tp = na
+var label lbl_entry  = na, var label lbl_sl  = na, var label lbl_tp  = na
+
+if barstate.islast
+    if not na(line_entry)
+        line.delete(line_entry)
+    if not na(line_sl)
+        line.delete(line_sl)
+    if not na(line_tp)
+        line.delete(line_tp)
+    if not na(lbl_entry)
+        label.delete(lbl_entry)
+    if not na(lbl_sl)
+        label.delete(lbl_sl)
+    if not na(lbl_tp)
+        label.delete(lbl_tp)
+
+    va = text_offset_pts
+
+    if show_active_trade_levels and call_ready
+        line_entry := line.new(bar_index - 5, close, bar_index + 1, close,
+             color = color.lime, width = active_trade_line_width, style = line.style_dashed, extend = extend.right)
+        line_sl := line.new(bar_index - 5, call_sl_dyn, bar_index + 1, call_sl_dyn,
+             color = color.red, width = active_trade_line_width, style = line.style_dotted, extend = extend.right)
+        line_tp := line.new(bar_index - 5, call_tp_dyn, bar_index + 1, call_tp_dyn,
+             color = color.green, width = active_trade_line_width, style = line.style_dotted, extend = extend.right)
+        lbl_entry := label.new(bar_index + label_offset_bars, close + va,
+             'Entry ' + str.tostring(close, '#.##'), style = label.style_label_left,
+             color = lbl_entry_bull_bg, textcolor = lbl_entry_text, size = size.tiny)
+        lbl_sl := label.new(bar_index + label_offset_bars, call_sl_dyn - va,
+             'SL ' + str.tostring(call_sl_dyn, '#.##'), style = label.style_label_left,
+             color = lbl_sl_bg, textcolor = lbl_sl_text, size = size.tiny)
+        lbl_tp := label.new(bar_index + label_offset_bars, call_tp_dyn + va,
+             'TP ' + str.tostring(call_tp_dyn, '#.##'), style = label.style_label_left,
+             color = lbl_tp_bg, textcolor = lbl_tp_text, size = size.tiny)
+
+    else if show_active_trade_levels and put_ready
+        line_entry := line.new(bar_index - 5, close, bar_index + 1, close,
+             color = color.orange, width = active_trade_line_width, style = line.style_dashed, extend = extend.right)
+        line_sl := line.new(bar_index - 5, put_sl_dyn, bar_index + 1, put_sl_dyn,
+             color = color.red, width = active_trade_line_width, style = line.style_dotted, extend = extend.right)
+        line_tp := line.new(bar_index - 5, put_tp_dyn, bar_index + 1, put_tp_dyn,
+             color = color.green, width = active_trade_line_width, style = line.style_dotted, extend = extend.right)
+        lbl_entry := label.new(bar_index + label_offset_bars, close + va,
+             'Entry ' + str.tostring(close, '#.##'), style = label.style_label_left,
+             color = lbl_entry_bear_bg, textcolor = lbl_entry_text, size = size.tiny)
+        lbl_sl := label.new(bar_index + label_offset_bars, put_sl_dyn - va,
+             'SL ' + str.tostring(put_sl_dyn, '#.##'), style = label.style_label_left,
+             color = lbl_sl_bg, textcolor = lbl_sl_text, size = size.tiny)
+        lbl_tp := label.new(bar_index + label_offset_bars, put_tp_dyn + va,
+             'TP ' + str.tostring(put_tp_dyn, '#.##'), style = label.style_label_left,
+             color = lbl_tp_bg, textcolor = lbl_tp_text, size = size.tiny)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 11 — MAIN DASHBOARD TABLE                                   ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+tbl_sz = f_get_size(table_text_size)
+var table rec_table = table.new(f_get_position(table_position), 2, 16,
+     bgcolor = tbl_bg, border_width = 1, border_color = tbl_border)
+
+need_tbl = show_recommendation_table and
+     (update_mode == 'realtime' ? barstate.islast : (barstate.islast and barstate.isconfirmed))
+
+rr_display    = call_ready ? str.tostring(call_rr_dyn, '#.##') : put_ready ? str.tostring(put_rr_dyn, '#.##') : '-'
+rr_color      = call_ready ? tbl_bull_text : put_ready ? tbl_bear_text : tbl_muted
+active_sl_str = call_ready ? str.tostring(call_sl_dyn, '#.##') : put_ready ? str.tostring(put_sl_dyn, '#.##') : '-'
+active_tp_str = call_ready ? str.tostring(call_tp_dyn, '#.##') : put_ready ? str.tostring(put_tp_dyn, '#.##') : '-'
+theme_icon    = is_dark ? ' 🌙' : ' ☀️'
+
+if need_tbl
+    table.clear(rec_table, 0, 0, 1, 15)
+
+    // Row 0: Header
+    table.cell(rec_table, 0, 0, '🖥️ SPX [' + profile_mode + ']' + theme_icon,
+         text_color = color.white, bgcolor = tbl_header_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 0, '',
+         text_color = color.white, bgcolor = tbl_header_bg, text_size = tbl_sz)
+    table.merge_cells(rec_table, 0, 0, 1, 0)
+
+    // Row 1: Market Bias
+    rec_tc = switch final_rec
+        'BULLISH BIAS' => tbl_bull_text
+        'BEARISH BIAS' => tbl_bear_text
+        'CHECK LEVELS' => is_dark ? color.new(#C084FC, 0) : color.new(#7C3AED, 0)
+        => tbl_warn_text
+    table.cell(rec_table, 0, 1, 'Bias',   text_color = tbl_text, bgcolor = tbl_rec_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 1, final_rec, text_color = rec_tc,   bgcolor = tbl_bg,     text_size = tbl_sz)
+
+    // Row 2: Price
+    pc = above_zero ? tbl_bull_text : below_zero ? tbl_bear_text : tbl_zero_text
+    table.cell(rec_table, 0, 2, 'Price',     text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 2, str.tostring(close, '#.##'), text_color = pc, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 3: Composite
+    sc = composite_score > 55 ? tbl_bull_text : composite_score < 45 ? tbl_bear_text : tbl_warn_text
+    table.cell(rec_table, 0, 3, 'Composite', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 3, str.tostring(composite_score, '#.#'), text_color = sc, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 4: RSI (Current)
+    table.cell(rec_table, 0, 4, 'RSI (Cur)', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 4, str.tostring(rsi_cur, '#.#'),
+         text_color = rsi_cur >= 50 ? tbl_bull_text : tbl_bear_text, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 5: RSI (1H)
+    table.cell(rec_table, 0, 5, 'RSI (1H)',  text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 5, str.tostring(rsi_1h, '#.#'),
+         text_color = rsi_1h >= 50 ? tbl_bull_text : tbl_bear_text, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 6: RSI (Confirm TF)
+    table.cell(rec_table, 0, 6, 'RSI (' + confirm_tf + 'm)', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 6, str.tostring(rsi_tf, '#.#'),
+         text_color = rsi_tf >= 50 ? tbl_bull_text : tbl_bear_text, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 7: Volume
+    table.cell(rec_table, 0, 7, 'Volume',    text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 7, vol_state,
+         text_color = vol_is_high ? tbl_bull_text : tbl_warn_text, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 8: CALL Checklist
+    c_bg = call_quality == 'STRONG' ? tbl_strong_bg : call_quality == 'MEDIUM' ? tbl_medium_bg : tbl_bg
+    table.cell(rec_table, 0, 8, 'CALL Chk',  text_color = tbl_bull_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 8, str.tostring(call_checks, '#.#') + ' (' + call_quality_str + ')',
+         text_color = tbl_bull_text, bgcolor = c_bg, text_size = tbl_sz)
+
+    // Row 9: PUT Checklist
+    p_bg = put_quality == 'STRONG' ? tbl_strong_bg : put_quality == 'MEDIUM' ? tbl_medium_bg : tbl_bg
+    table.cell(rec_table, 0, 9, 'PUT Chk',   text_color = tbl_bear_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 9, str.tostring(put_checks, '#.#') + ' (' + put_quality_str + ')',
+         text_color = tbl_bear_text, bgcolor = p_bg, text_size = tbl_sz)
+
+    // Row 10: Entry / R:R
+    e_txt = (call_ready ? entry_type_call : put_ready ? entry_type_put : '-') + ' | ' + rr_display
+    table.cell(rec_table, 0, 10, 'Entry/R:R', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 10, e_txt,
+         text_color = call_ready ? tbl_bull_text : put_ready ? tbl_bear_text : tbl_muted, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 11: SL / TP
+    table.cell(rec_table, 0, 11, 'SL / TP',   text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 11, active_sl_str + ' / ' + active_tp_str,
+         text_color = call_ready or put_ready ? tbl_text : tbl_muted, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 12: Signal
+    table.cell(rec_table, 0, 12, 'Signal',    text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 12, signal_text,
+         text_color = call_ready ? tbl_bull_text : put_ready ? tbl_bear_text : tbl_warn_text, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 13: Validation
+    vs  = valid_setup ? '✅ Valid' : not valid_order ? '❌ Levels' : '⚠️ Zones'
+    tfn = tf_is_valid ? '' : ' | ⚠️TF'
+    table.cell(rec_table, 0, 13, 'Validation', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 13, vs + tfn,
+         text_color = valid_setup and tf_is_valid ? tbl_bull_text : tbl_bear_text,
+         bgcolor = valid_setup ? tbl_ok_bg : tbl_bad_bg, text_size = tbl_sz)
+
+    // Row 14: Confirmed Candle
+    table.cell(rec_table, 0, 14, 'Confirmed',  text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 14, use_confirmed_candle ? 'ON' : 'OFF',
+         text_color = use_confirmed_candle ? tbl_bull_text : tbl_warn_text, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 15: Distance to Zero Gamma
+    table.cell(rec_table, 0, 15, 'Dist to ZG', text_color = tbl_zero_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(rec_table, 1, 15, str.tostring(distance_to_zero, '#.##'),
+         text_color = at_zero ? tbl_warn_text : above_zero ? tbl_bull_text : tbl_bear_text,
+         bgcolor = tbl_bg, text_size = tbl_sz)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 12 — STRUCTURE & RETRACEMENT TABLE                          ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+var table str_table = table.new(f_get_position(struct_table_position), 2, 11,
+     bgcolor = tbl_bg, border_width = 1, border_color = tbl_border)
+
+need_str_tbl = enable_structure and show_structure_table and
+     (update_mode == 'realtime' ? barstate.islast : (barstate.islast and barstate.isconfirmed))
+
+if need_str_tbl
+    table.clear(str_table, 0, 0, 1, 10)
+
+    // Row 0: Header
+    table.cell(str_table, 0, 0, '📐 STRUCTURE & RETRACEMENT' + theme_icon,
+         text_color = color.white, bgcolor = struct_hdr_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 0, '',
+         text_color = color.white, bgcolor = struct_hdr_bg, text_size = tbl_sz)
+    table.merge_cells(str_table, 0, 0, 1, 0)
+
+    // Row 1: Trend Structure
+    s_col = struct_bullish ? tbl_bull_text : struct_bearish ? tbl_bear_text : tbl_warn_text
+    table.cell(str_table, 0, 1, 'Structure', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 1, struct_label, text_color = s_col,    bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 2: Last Structure Event + age
+    evt_col = str.contains(last_struct_event, '↑') ? tbl_bull_text :
+               str.contains(last_struct_event, '↓') ? tbl_bear_text : tbl_muted
+    evt_age = last_struct_event != 'NONE' ? (' (' + str.tostring(struct_event_age) + ' bars)') : ''
+    table.cell(str_table, 0, 2, 'Event',     text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 2, last_struct_event + evt_age,
+         text_color = evt_col, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 3: Swing Points (with HH/HL/LH/LL annotation)
+    sh_str  = not na(last_sh) ? str.tostring(last_sh, '#.##') : '-'
+    sl_str  = not na(last_sl) ? str.tostring(last_sl, '#.##') : '-'
+    sh_type = sh_is_hh ? ' HH' : sh_is_lh ? ' LH' : ''
+    sl_type = sl_is_hl ? ' HL' : sl_is_ll ? ' LL' : ''
+    table.cell(str_table, 0, 3, 'Swing H/L', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 3, sh_str + sh_type + ' / ' + sl_str + sl_type,
+         text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 4: Retracement depth
+    ret_str = not na(retrace_pct) ?
+         (str.tostring(retrace_pct * 100, '#.#') + '% ' + (last_swing_is_high ? 'from High' : 'from Low')) : '-'
+    ret_col = not na(retrace_pct) and retrace_pct >= 0.382 and retrace_pct <= 0.618 ? tbl_warn_text : tbl_text
+    table.cell(str_table, 0, 4, 'Retracement', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 4, ret_str, text_color = ret_col, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 5: Nearest Fibonacci level
+    fib_price_str = nearest_fib_str != '-' and at_any_fib ?
+         (nearest_fib_str + ' @ ' + str.tostring(
+              near_fib_618 ? fib_618 : near_fib_500 ? fib_500 : near_fib_382 ? fib_382 :
+              near_fib_236 ? fib_236 : fib_786, '#.#')) :
+         nearest_fib_str
+    fib_c = at_any_fib ? fib_col_618 : tbl_muted
+    table.cell(str_table, 0, 5, 'Fib Level',  text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 5, fib_price_str, text_color = fib_c,    bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 6: Key Level Proximity
+    kl_str = nearest_key_str != '-' and not na(nearest_key_dist) ?
+         (nearest_key_str + ' ' + str.tostring(nearest_key_dist, '#.#') + 'pts') : '-'
+    kl_c = at_any_key_level ? tbl_zero_text : tbl_muted
+    table.cell(str_table, 0, 6, 'Key Level',  text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 6, kl_str, text_color = kl_c, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 7: Confluence status
+    conf_str = has_confluence        ? ('✅ ' + nearest_fib_str + ' + ' + nearest_key_str) : at_any_fib            ? '⚡ Fib only'    :  at_any_key_level      ? '⚡ Level only'  : '-'
+    conf_col = has_confluence ? tbl_bull_text : (at_any_fib or at_any_key_level) ? tbl_warn_text : tbl_muted
+    table.cell(str_table, 0, 7, 'Confluence', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 7, conf_str, text_color = conf_col, bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 8: Retracement signal
+    r_sig     = retrace_call ? 'BULL RETRACE ✅' : retrace_put ? 'BEAR RETRACE ✅' : '-'
+    r_sig_col = retrace_call ? tbl_bull_text     : retrace_put ? tbl_bear_text      : tbl_muted
+    r_sig_bg  = retrace_call or retrace_put ? tbl_strong_bg : tbl_bg
+    table.cell(str_table, 0, 8, 'Retrace Sig', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 8, r_sig, text_color = r_sig_col, bgcolor = r_sig_bg, text_size = tbl_sz)
+
+    // Row 9: Level test counts (rolling window)
+    // FIX: f_tc_col is declared at global scope (Section 3) — called here correctly.
+    tc_str = 'SL:' + str.tostring(tc_sl) + ' SM:' + str.tostring(tc_sm) + ' ZG:' + str.tostring(tc_zg) +
+             ' RM:' + str.tostring(tc_rm) + ' RH:' + str.tostring(tc_rh)
+    max_tc = math.max(tc_sl, math.max(tc_sm, math.max(tc_zg, math.max(tc_rm, tc_rh))))
+    table.cell(str_table, 0, 9, 'Level Tests', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 9, tc_str, text_color = f_tc_col(max_tc), bgcolor = tbl_bg, text_size = tbl_sz)
+
+    // Row 10: Structure quality score
+    sq_col = struct_quality >= 7 ? tbl_bull_text : struct_quality >= 4 ? tbl_warn_text : tbl_bear_text
+    table.cell(str_table, 0, 10, 'Struct Qual', text_color = tbl_text, bgcolor = tbl_bg, text_size = tbl_sz)
+    table.cell(str_table, 1, 10, str.tostring(struct_quality, '#.#') + ' / 10',
+         text_color = sq_col, bgcolor = tbl_bg, text_size = tbl_sz)
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 13 — ALERTS                                                 ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+var int last_alert_bar = -999
+alert_cooled    = (bar_index - last_alert_bar) >= alert_cooldown_bars
+bias_changed    = bar_index > 0 and final_rec != final_rec[1]
+in_bull_zone    = close >= bull_entry_low  and close <= bull_entry_high
+in_bear_zone    = close >= bear_entry_low  and close <= bear_entry_high
+enter_bull_zone = in_bull_zone and not in_bull_zone[1]
+enter_bear_zone = in_bear_zone and not in_bear_zone[1]
+can_alert       = update_mode == 'realtime' ? true : barstate.isconfirmed
+
+if enable_alerts and can_alert and alert_cooled and valid_setup
+    did_send = false
+
+    // Bias change
+    if alert_on_bias_change and bias_changed
+        f_send_alert('SPX Bias → ' + final_rec +
+             ' | Score:' + str.tostring(composite_score, '#.#') +
+             ' | Close:' + str.tostring(close, '#.##'))
+        did_send := true
+
+    // Zero gamma cross
+    if alert_on_zero_cross and x_zero_up
+        f_send_alert('SPX crossed ABOVE Zero Gamma @ ' + str.tostring(zero_gamma, '#.##'))
+        did_send := true
+    if alert_on_zero_cross and x_zero_down
+        f_send_alert('SPX crossed BELOW Zero Gamma @ ' + str.tostring(zero_gamma, '#.##'))
+        did_send := true
+
+    // Key level crosses (respect visibility)
+    if alert_on_key_levels and x_sup_low and show_sup_low
+        f_send_alert('SPX crossed Major Put @ ' + str.tostring(sup_low, '#.##'))
+        did_send := true
+    if alert_on_key_levels and x_sup_mid and show_sup_mid
+        f_send_alert('SPX crossed Support Mid @ ' + str.tostring(sup_mid, '#.##'))
+        did_send := true
+    if alert_on_key_levels and x_res_mid and show_res_mid
+        f_send_alert('SPX crossed Resistance Mid @ ' + str.tostring(res_mid, '#.##'))
+        did_send := true
+    if alert_on_key_levels and x_res_high and show_res_high
+        f_send_alert('SPX crossed Major Call @ ' + str.tostring(res_high, '#.##'))
+        did_send := true
+
+    // Entry zone alerts
+    if alert_on_entry_zones and enter_bull_zone and show_trade_zones
+        f_send_alert('SPX entered Bull Zone: ' +
+             str.tostring(bull_entry_low, '#.##') + '–' + str.tostring(bull_entry_high, '#.##'))
+        did_send := true
+    if alert_on_entry_zones and enter_bear_zone and show_trade_zones
+        f_send_alert('SPX entered Bear Zone: ' +
+             str.tostring(bear_entry_low, '#.##') + '–' + str.tostring(bear_entry_high, '#.##'))
+        did_send := true
+
+    // Target alerts (respect visibility)
+    if alert_on_targets and show_targets and h_bull_tp1 and show_res_mid
+        f_send_alert('SPX Bull TP1 @ ' + str.tostring(bull_tp1, '#.##'))
+        did_send := true
+    if alert_on_targets and show_targets and h_bull_tp2
+        f_send_alert('SPX Bull TP2 @ ' + str.tostring(bull_tp2, '#.##'))
+        did_send := true
+    if alert_on_targets and show_targets and h_bull_tp3 and show_res_high
+        f_send_alert('SPX Bull TP3 @ ' + str.tostring(bull_tp3, '#.##'))
+        did_send := true
+    if alert_on_targets and show_targets and h_bull_tp4
+        f_send_alert('SPX Bull TP4 Ext @ ' + str.tostring(bull_tp4, '#.##'))
+        did_send := true
+    if alert_on_targets and show_targets and h_bear_tp1 and show_sup_mid
+        f_send_alert('SPX Bear TP1 @ ' + str.tostring(bear_tp1, '#.##'))
+        did_send := true
+    if alert_on_targets and show_targets and h_bear_tp2 and show_sup_low
+        f_send_alert('SPX Bear TP2 @ ' + str.tostring(bear_tp2, '#.##'))
+        did_send := true
+    if alert_on_targets and show_targets and h_bear_tp3
+        f_send_alert('SPX Bear TP3 Ext @ ' + str.tostring(bear_tp3, '#.##'))
+        did_send := true
+
+    // Trade setup alerts
+    if alert_on_trade_setups and new_call_signal
+        f_send_alert('🟢 CALL ' + call_quality_str + ' [' + entry_type_call + ']' +
+             ' Chk:' + str.tostring(call_checks, '#.#') +
+             ' R:R:' + str.tostring(call_rr_dyn, '#.##') +
+             ' Vol:' + vol_state)
+        did_send := true
+    if alert_on_trade_setups and new_put_signal
+        f_send_alert('🔴 PUT ' + put_quality_str + ' [' + entry_type_put + ']' +
+             ' Chk:' + str.tostring(put_checks, '#.#') +
+             ' R:R:' + str.tostring(put_rr_dyn, '#.##') +
+             ' Vol:' + vol_state)
+        did_send := true
+
+    // Structure event alerts (BOS / CHoCH)
+    if alert_on_structure and enable_structure
+        if bos_bull
+            f_send_alert('📐 BOS ↑ above ' + str.tostring(last_sh, '#.##') + ' | ' + struct_label)
+            did_send := true
+        if bos_bear
+            f_send_alert('📐 BOS ↓ below ' + str.tostring(last_sl, '#.##') + ' | ' + struct_label)
+            did_send := true
+        if choch_bull
+            f_send_alert('📐 CHoCH ↑ above ' + str.tostring(last_sh, '#.##') + ' | ' + struct_label)
+            did_send := true
+        if choch_bear
+            f_send_alert('📐 CHoCH ↓ below ' + str.tostring(last_sl, '#.##') + ' | ' + struct_label)
+            did_send := true
+
+    // Retracement confirmation alerts
+    if alert_on_retracement and enable_retracement
+        if new_retrace_call
+            f_send_alert('📏 BULL RETRACE | Fib:' + nearest_fib_str +
+                 ' | Level:' + nearest_key_str +
+                 ' | Struct:' + struct_label +
+                 ' | Depth:' + str.tostring(retrace_pct * 100, '#.#') + '%')
+            did_send := true
+        if new_retrace_put
+            f_send_alert('📏 BEAR RETRACE | Fib:' + nearest_fib_str +
+                 ' | Level:' + nearest_key_str +
+                 ' | Struct:' + struct_label +
+                 ' | Depth:' + str.tostring(retrace_pct * 100, '#.#') + '%')
+            did_send := true
+
+    // Update cooldown
+    if did_send
+        last_alert_bar := bar_index
+// ═══════════════════════════════════════════════ END ═══════════════════════════════════════════════
