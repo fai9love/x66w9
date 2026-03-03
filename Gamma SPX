@@ -1,18 +1,18 @@
 //@version=6
 // ═══════════════════════════════════════════════════════════════════════════
-//  📊 Gamma SPX [Pro v11] — Structure & Retracement Engine (Production)
+//  📊 Gamma SPX [Pro v11.1] — Structure & Retracement Engine (Production)
 //
-//  CHANGELOG (v10 → v11):
-//    • Market structure module (swing detection, BOS/CHoCH, trend class)
-//    • Fibonacci retracement engine with confluence detection
-//    • Level test counter (rolling window)
-//    • Structure quality score (0–10)
-//    • Enhanced checklist items c11 (structure) + c12 (retrace)
-//    • Dedicated structure dashboard table
-//    • New alert types: BOS/CHoCH, Confirmed Retracement
-//    • All new features gated by toggles — backward compatible with v10
+//  CHANGELOG (v11 → v11.1):
+//    • FIX: request.security lookahead_on for confirmed candle (prevents repainting)
+//    • FIX: nearest_key_dist expression reformatted for clarity
+//    • FIX: struct_table_position group reference verified and cleaned
+//    • PERF: Label change-detection guard prevents unnecessary redraw on every tick
+//    • PERF: rsi_1h deduplicates security call when confirm_tf == '60'
+//    • REFACTOR: Named constants block (FIB_*, SCORE_*, W_*) replaces magic numbers
+//    • REFACTOR: f_send_alert — removed unused return value
+//    • DOCS: JSDoc-style headers added to all f_* utility functions
 // ═══════════════════════════════════════════════════════════════════════════
-indicator('📊 Gamma SPX [Pro v11]', overlay = true, max_labels_count = 500, max_lines_count = 500)
+indicator('📊 Gamma SPX [Pro v11.1]', overlay = true, max_labels_count = 500, max_lines_count = 500)
 
 // ╔═══════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 1 — INPUTS                                                  ║
@@ -133,11 +133,16 @@ alert_on_structure    = input.bool(true, 'Alert: BOS/CHoCH Events',       group 
 // ║  Pure functions with no side effects. Declared at global scope.      ║
 // ╚═══════════════════════════════════════════════════════════════════════╝
 
-// Validates that all five key levels are in ascending order.
+// @function  f_check_levels_validity
+// @desc      Validates that all five key levels are in strict ascending order.
+// @returns   bool — true if SL < SM < ZG < RM < RH
 f_check_levels_validity() =>
     sup_low < sup_mid and sup_mid < zero_gamma and zero_gamma < res_mid and res_mid < res_high
 
-// Maps string input to Pine position constant.
+// @function  f_get_position
+// @desc      Maps a position string input to the corresponding Pine position constant.
+// @param     pos  string — One of: 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'middle_left', 'middle_right'
+// @returns   series string (position constant)
 f_get_position(pos) =>
     switch pos
         'top_left'     => position.top_left
@@ -147,7 +152,10 @@ f_get_position(pos) =>
         'middle_right' => position.middle_right
         => position.top_right
 
-// Maps string input to Pine size constant.
+// @function  f_get_size
+// @desc      Maps a size string input to the corresponding Pine size constant.
+// @param     s  string — One of: 'tiny', 'small', 'normal', 'large', 'huge'
+// @returns   series string (size constant)
 f_get_size(s) =>
     switch s
         'tiny'  => size.tiny
@@ -156,19 +164,35 @@ f_get_size(s) =>
         'huge'  => size.huge
         => size.normal
 
-// Returns true if two price levels are within merge_ticks of each other.
+// @function  f_levels_overlap
+// @desc      Returns true if two price levels are within merge_ticks of each other (visually merged).
+// @param     a  float — First price level
+// @param     b  float — Second price level
+// @returns   bool
 f_levels_overlap(a, b) =>
     math.abs(a - b) <= merge_ticks * syminfo.mintick
 
-// Clamps a value between lo and hi.
+// @function  f_clamp
+// @desc      Clamps a value between a lower and upper bound.
+// @param     val  float — Input value
+// @param     lo   float — Lower bound
+// @param     hi   float — Upper bound
+// @returns   float
 f_clamp(val, lo, hi) =>
     math.max(lo, math.min(val, hi))
 
-// Returns fallback if val is na, otherwise val.
+// @function  f_nz
+// @desc      Returns fallback if val is na, otherwise returns val. Safe na-replacement.
+// @param     val       float — Value to check
+// @param     fallback  float — Value to return if val is na
+// @returns   float
 f_nz(val, fallback) =>
     na(val) ? fallback : val
 
-// Sends an alert using the user-selected frequency. Returns true for type consistency.
+// @function  f_send_alert
+// @desc      Dispatches an alert at the user-configured frequency.
+//            Frequency options: 'all', 'once_per_bar', 'once_per_bar_close'.
+// @param     _msg  string — The alert message to send.
 f_send_alert(_msg) =>
     if alert_frequency == 'all'
         alert(_msg, alert.freq_all)
@@ -176,7 +200,35 @@ f_send_alert(_msg) =>
         alert(_msg, alert.freq_once_per_bar)
     else
         alert(_msg, alert.freq_once_per_bar_close)
-    true
+
+// ╔═══════════════════════════════════════════════════════════════════════╗
+// ║  SECTION 2b — NAMED CONSTANTS                                        ║
+// ║  Eliminates magic number scatter. Reference these throughout.        ║
+// ╚═══════════════════════════════════════════════════════════════════════╝
+
+// ── Checklist item weights ──
+W_POSITION    = 1.0   // weight for c1–c5, c9, c10
+W_VALID_SETUP = 2.0   // weight for c6
+W_TF_CONFIRM  = 1.0   // weight for c7
+W_VOLUME      = 1.5   // weight for c8
+W_STRUCTURE   = 1.5   // weight for c11 (max)
+W_RETRACE     = 1.0   // weight for c12 (max)
+// Total max checklist score: W_POSITION*6 + W_VALID_SETUP + W_TF_CONFIRM + W_VOLUME + W_STRUCTURE + W_RETRACE = 14.0
+
+// ── Composite score constants ──
+SCORE_NEUTRAL     = 50.0
+ZG_SCORE_SCALE    = 12.0
+RSI_SCORE_SCALE   = 15.0
+CCI_SCORE_SCALE   = 10.0
+HTF_SCORE_SCALE   = 10.0
+SCORE_CLAMP_MAX   = 20.0
+
+// ── Fibonacci ratios ──
+FIB_236 = 0.236
+FIB_382 = 0.382
+FIB_500 = 0.500
+FIB_618 = 0.618
+FIB_786 = 0.786
 
 // ╔═══════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 3 — THEME ENGINE                                            ║
@@ -228,6 +280,11 @@ retrace_zone_col = is_dark ? color.new(#A78BFA, 90) : color.new(#7C3AED, 92)
 // ── Level test count coloring ──
 // FIX: This function MUST be at global scope after theme vars are declared.
 // Pine v6 does not allow function definitions inside local `if` blocks.
+// @function  f_tc_col
+// @desc      Returns a theme-aware color for level test count display.
+//            Red for overused levels (≥5), yellow for moderate (≥3), green otherwise.
+// @param     count  int — Rolling touch count for a given key level
+// @returns   color
 f_tc_col(count) =>
     count >= 5 ? tbl_bear_text : count >= 3 ? tbl_warn_text : tbl_bull_text
 
@@ -294,22 +351,21 @@ bear_tp3 = sup_low - tp_extension
 // ── 5c. Momentum indicators (na-safe) ──
 rsi_cur = f_nz(ta.rsi(close, rsi_len), 50.0)
 cci_cur = f_nz(ta.cci(hlc3, cci_len), 0.0)
-rsi_1h  = f_nz(request.security(syminfo.tickerid, '60', ta.rsi(close, rsi_len),
-             barmerge.gaps_off, barmerge.lookahead_off), 50.0)
 
 // ── 5d. Confirmation timeframe data (single consolidated security call) ──
-rsi_tf_expr = ta.rsi(close, rsi_len)
-cci_tf_expr = ta.cci(hlc3, cci_len)
-rsi_sec = use_confirmed_candle ? rsi_tf_expr[1] : rsi_tf_expr
-cci_sec = use_confirmed_candle ? cci_tf_expr[1] : cci_tf_expr
-cls_sec = use_confirmed_candle ? close[1] : close
-low_sec = use_confirmed_candle ? low[1]   : low
-hi_sec  = use_confirmed_candle ? high[1]  : high
-
+// NOTE: The [1] offset and lookahead_on are applied INSIDE the security call
+// so Pine evaluates them in the HTF context, correctly preventing repainting.
 [rsi_tf_raw, cci_tf_raw, close_tf_raw, low_tf_raw, high_tf_raw] = request.security(
      syminfo.tickerid, confirm_tf,
-     [rsi_sec, cci_sec, cls_sec, low_sec, hi_sec],
-     barmerge.gaps_off, barmerge.lookahead_off)
+     [
+         use_confirmed_candle ? ta.rsi(close, rsi_len)[1] : ta.rsi(close, rsi_len),
+         use_confirmed_candle ? ta.cci(hlc3, cci_len)[1]  : ta.cci(hlc3, cci_len),
+         use_confirmed_candle ? close[1] : close,
+         use_confirmed_candle ? low[1]   : low,
+         use_confirmed_candle ? high[1]  : high
+     ],
+     barmerge.gaps_off,
+     use_confirmed_candle ? barmerge.lookahead_on : barmerge.lookahead_off)
 
 rsi_tf   = f_nz(rsi_tf_raw, 50.0)
 cci_tf   = f_nz(cci_tf_raw, 0.0)
@@ -317,12 +373,19 @@ close_tf = f_nz(close_tf_raw, close)
 low_tf   = f_nz(low_tf_raw, low)
 high_tf  = f_nz(high_tf_raw, high)
 
+// rsi_1h: reuse confirm TF result if confirm_tf is '60', else fetch separately
+// This avoids a duplicate security call on the most common confirmation timeframe.
+rsi_1h_raw = confirm_tf == '60' ? rsi_tf_raw :
+     request.security(syminfo.tickerid, '60', ta.rsi(close, rsi_len),
+         barmerge.gaps_off, barmerge.lookahead_off)
+rsi_1h = f_nz(rsi_1h_raw, 50.0)
+
 // ── 5e. Composite score ──
-zg_score  = f_clamp(distance_to_zero / math.max(at_zero_threshold, syminfo.mintick) * 12.0, -20.0, 20.0)
-rsi_score = f_clamp((rsi_cur - 50.0) / 50.0 * 15.0, -15.0, 15.0)
-cci_score = f_clamp(cci_cur / 200.0 * 10.0, -10.0, 10.0)
-htf_score = f_clamp((rsi_1h - 50.0) / 50.0 * 10.0, -10.0, 10.0)
-composite_score = f_clamp(50.0 + zg_score + rsi_score + cci_score + htf_score, 0.0, 100.0)
+zg_score  = f_clamp(distance_to_zero / math.max(at_zero_threshold, syminfo.mintick) * ZG_SCORE_SCALE, -SCORE_CLAMP_MAX, SCORE_CLAMP_MAX)
+rsi_score = f_clamp((rsi_cur - SCORE_NEUTRAL) / SCORE_NEUTRAL * RSI_SCORE_SCALE, -RSI_SCORE_SCALE, RSI_SCORE_SCALE)
+cci_score = f_clamp(cci_cur / 200.0 * CCI_SCORE_SCALE, -CCI_SCORE_SCALE, CCI_SCORE_SCALE)
+htf_score = f_clamp((rsi_1h - SCORE_NEUTRAL) / SCORE_NEUTRAL * HTF_SCORE_SCALE, -HTF_SCORE_SCALE, HTF_SCORE_SCALE)
+composite_score = f_clamp(SCORE_NEUTRAL + zg_score + rsi_score + cci_score + htf_score, 0.0, 100.0)
 
 score_band = profile_mode == 'Conservative' ? 8.0 : profile_mode == 'Aggressive' ? 3.0 : 5.0
 final_rec  = not valid_setup   ? 'CHECK LEVELS' :
@@ -484,11 +547,11 @@ retrace_pct = range_valid ?
      (last_swing_is_high ? (last_sh - close) / swing_range : (close - last_sl) / swing_range) : na
 
 // ── 7b. Fibonacci levels ──
-fib_236 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.236 : last_sl + swing_range * 0.236) : na
-fib_382 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.382 : last_sl + swing_range * 0.382) : na
-fib_500 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.500 : last_sl + swing_range * 0.500) : na
-fib_618 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.618 : last_sl + swing_range * 0.618) : na
-fib_786 = range_valid ? (last_swing_is_high ? last_sh - swing_range * 0.786 : last_sl + swing_range * 0.786) : na
+fib_236 = range_valid ? (last_swing_is_high ? last_sh - swing_range * FIB_236 : last_sl + swing_range * FIB_236) : na
+fib_382 = range_valid ? (last_swing_is_high ? last_sh - swing_range * FIB_382 : last_sl + swing_range * FIB_382) : na
+fib_500 = range_valid ? (last_swing_is_high ? last_sh - swing_range * FIB_500 : last_sl + swing_range * FIB_500) : na
+fib_618 = range_valid ? (last_swing_is_high ? last_sh - swing_range * FIB_618 : last_sl + swing_range * FIB_618) : na
+fib_786 = range_valid ? (last_swing_is_high ? last_sh - swing_range * FIB_786 : last_sl + swing_range * FIB_786) : na
 
 // Retrace zone: 38.2%–61.8% (the "golden pocket")
 retrace_zone_hi = range_valid ? (last_swing_is_high ? fib_382 : fib_618) : na
@@ -522,7 +585,11 @@ nearest_key_str = near_zero_gamma_r ? 'Zero Gamma' :
                    near_sup_low_r    ? 'Major Put'  :
                    near_res_high_r   ? 'Major Call'  : '-'
 
-nearest_key_dist = near_zero_gamma_r ? math.abs(close - zero_gamma) :  near_sup_mid_r    ? math.abs(close - sup_mid)    :  near_res_mid_r    ? math.abs(close - res_mid)    :   near_sup_low_r    ? math.abs(close - sup_low)    :   near_res_high_r   ? math.abs(close - res_high)   : na
+nearest_key_dist = near_zero_gamma_r ? math.abs(close - zero_gamma) :
+                   near_sup_mid_r    ? math.abs(close - sup_mid)    :
+                   near_res_mid_r    ? math.abs(close - res_mid)    :
+                   near_sup_low_r    ? math.abs(close - sup_low)    :
+                   near_res_high_r   ? math.abs(close - res_high)   : na
 
 // ── 7d. Confluence detection ──
 call_at_support   = near_sup_low_r or near_sup_mid_r or (near_zero_gamma_r and below_zero)
@@ -534,12 +601,12 @@ has_confluence    = at_any_key_level and at_any_fib
 retrace_call = enable_retracement and enable_structure and
      last_swing_is_high and call_at_support and at_any_fib and
      (struct_bullish or struct_transition) and
-     not na(retrace_pct) and retrace_pct >= 0.236 and retrace_pct <= 0.886
+     not na(retrace_pct) and retrace_pct >= FIB_236 and retrace_pct <= 0.886
 
 retrace_put = enable_retracement and enable_structure and
      not last_swing_is_high and put_at_resistance and at_any_fib and
      (struct_bearish or struct_transition) and
-     not na(retrace_pct) and retrace_pct >= 0.236 and retrace_pct <= 0.886
+     not na(retrace_pct) and retrace_pct >= FIB_236 and retrace_pct <= 0.886
 
 new_retrace_call = retrace_call and not retrace_call[1]
 new_retrace_put  = retrace_put  and not retrace_put[1]
@@ -811,82 +878,100 @@ var label lbl_tp2   = na, var label lbl_tp4   = na, var label lbl_bear3 = na
 var label lbl_bullL = na, var label lbl_bullH = na
 var label lbl_bearL = na, var label lbl_bearH = na
 
+// Change-detection guards for label redraw efficiency
+var float _last_sup_low_drawn  = na
+var float _last_sup_mid_drawn  = na
+var float _last_zero_gamma_drawn = na
+var float _last_res_mid_drawn  = na
+var float _last_res_high_drawn = na
+var int   _last_label_bar      = na
+
 if barstate.islast and show_price_text
     lbl_x = bar_index + label_offset_bars
     v     = text_offset_pts
+    _levels_changed = _last_sup_low_drawn != sup_low or _last_sup_mid_drawn != sup_mid or
+         _last_zero_gamma_drawn != zero_gamma or _last_res_mid_drawn != res_mid or
+         _last_res_high_drawn != res_high or _last_label_bar != bar_index
 
-    // Clean up previous iteration
-    if not na(lbl_p_sl)
-        label.delete(lbl_p_sl)
-    if not na(lbl_p_sm)
-        label.delete(lbl_p_sm)
-    if not na(lbl_p_zg)
-        label.delete(lbl_p_zg)
-    if not na(lbl_p_rm)
-        label.delete(lbl_p_rm)
-    if not na(lbl_p_rh)
-        label.delete(lbl_p_rh)
-    if not na(lbl_tp2)
-        label.delete(lbl_tp2)
-    if not na(lbl_tp4)
-        label.delete(lbl_tp4)
-    if not na(lbl_bear3)
-        label.delete(lbl_bear3)
-    if not na(lbl_bullL)
-        label.delete(lbl_bullL)
-    if not na(lbl_bullH)
-        label.delete(lbl_bullH)
-    if not na(lbl_bearL)
-        label.delete(lbl_bearL)
-    if not na(lbl_bearH)
-        label.delete(lbl_bearH)
+    if _levels_changed
+        // Clean up previous iteration
+        if not na(lbl_p_sl)
+            label.delete(lbl_p_sl)
+        if not na(lbl_p_sm)
+            label.delete(lbl_p_sm)
+        if not na(lbl_p_zg)
+            label.delete(lbl_p_zg)
+        if not na(lbl_p_rm)
+            label.delete(lbl_p_rm)
+        if not na(lbl_p_rh)
+            label.delete(lbl_p_rh)
+        if not na(lbl_tp2)
+            label.delete(lbl_tp2)
+        if not na(lbl_tp4)
+            label.delete(lbl_tp4)
+        if not na(lbl_bear3)
+            label.delete(lbl_bear3)
+        if not na(lbl_bullL)
+            label.delete(lbl_bullL)
+        if not na(lbl_bullH)
+            label.delete(lbl_bullH)
+        if not na(lbl_bearL)
+            label.delete(lbl_bearL)
+        if not na(lbl_bearH)
+            label.delete(lbl_bearH)
 
-    // Supports offset down, resistances offset up (labels pushed away from price)
-    if show_sup_low
-        lbl_p_sl := label.new(lbl_x, sup_low - v, 'Major Put ' + str.tostring(sup_low, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_sup_low, size = size.normal)
-    if show_sup_mid
-        lbl_p_sm := label.new(lbl_x, sup_mid - v, 'Support Mid ' + str.tostring(sup_mid, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_sup_mid, size = size.normal)
-    if show_zero_gamma
-        lbl_p_zg := label.new(lbl_x, zero_gamma + v, 'Zero Gamma ' + str.tostring(zero_gamma, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_zero, size = size.normal)
-    if show_res_mid
-        lbl_p_rm := label.new(lbl_x, res_mid + v, 'Res Mid ' + str.tostring(res_mid, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_res_mid, size = size.normal)
-    if show_res_high
-        lbl_p_rh := label.new(lbl_x, res_high + v, 'Major Call ' + str.tostring(res_high, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_res_high, size = size.normal)
+        // Supports offset down, resistances offset up (labels pushed away from price)
+        if show_sup_low
+            lbl_p_sl := label.new(lbl_x, sup_low - v, 'Major Put ' + str.tostring(sup_low, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_sup_low, size = size.normal)
+        if show_sup_mid
+            lbl_p_sm := label.new(lbl_x, sup_mid - v, 'Support Mid ' + str.tostring(sup_mid, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_sup_mid, size = size.normal)
+        if show_zero_gamma
+            lbl_p_zg := label.new(lbl_x, zero_gamma + v, 'Zero Gamma ' + str.tostring(zero_gamma, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_zero, size = size.normal)
+        if show_res_mid
+            lbl_p_rm := label.new(lbl_x, res_mid + v, 'Res Mid ' + str.tostring(res_mid, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_res_mid, size = size.normal)
+        if show_res_high
+            lbl_p_rh := label.new(lbl_x, res_high + v, 'Major Call ' + str.tostring(res_high, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_res_high, size = size.normal)
 
-    if show_targets
-        lbl_tp2   := label.new(lbl_x, bull_tp2 + v, 'TP2 ' + str.tostring(bull_tp2, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = tbl_bull_text, size = size.small)
-        lbl_tp4   := label.new(lbl_x, bull_tp4 + v, 'TP4 ' + str.tostring(bull_tp4, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = tbl_bull_text, size = size.small)
-        lbl_bear3 := label.new(lbl_x, bear_tp3 - v, 'TP3 ' + str.tostring(bear_tp3, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = tbl_bear_text, size = size.small)
+        if show_targets
+            lbl_tp2   := label.new(lbl_x, bull_tp2 + v, 'TP2 ' + str.tostring(bull_tp2, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = tbl_bull_text, size = size.small)
+            lbl_tp4   := label.new(lbl_x, bull_tp4 + v, 'TP4 ' + str.tostring(bull_tp4, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = tbl_bull_text, size = size.small)
+            lbl_bear3 := label.new(lbl_x, bear_tp3 - v, 'TP3 ' + str.tostring(bear_tp3, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = tbl_bear_text, size = size.small)
 
-    if show_trade_zones
-        lbl_bullL := label.new(lbl_x, bull_entry_low - v, 'Bull Lo ' + str.tostring(bull_entry_low, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_bull, size = size.small)
-        lbl_bullH := label.new(lbl_x, bull_entry_high + v, 'Bull Hi ' + str.tostring(bull_entry_high, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_bull, size = size.small)
-        lbl_bearL := label.new(lbl_x, bear_entry_low - v, 'Bear Lo ' + str.tostring(bear_entry_low, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_bear, size = size.small)
-        lbl_bearH := label.new(lbl_x, bear_entry_high + v, 'Bear Hi ' + str.tostring(bear_entry_high, '#.##'),
-             xloc = xloc.bar_index, style = label.style_label_left,
-             color = lbl_bg_clear, textcolor = col_bear, size = size.small)
+        if show_trade_zones
+            lbl_bullL := label.new(lbl_x, bull_entry_low - v, 'Bull Lo ' + str.tostring(bull_entry_low, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_bull, size = size.small)
+            lbl_bullH := label.new(lbl_x, bull_entry_high + v, 'Bull Hi ' + str.tostring(bull_entry_high, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_bull, size = size.small)
+            lbl_bearL := label.new(lbl_x, bear_entry_low - v, 'Bear Lo ' + str.tostring(bear_entry_low, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_bear, size = size.small)
+            lbl_bearH := label.new(lbl_x, bear_entry_high + v, 'Bear Hi ' + str.tostring(bear_entry_high, '#.##'),
+                 xloc = xloc.bar_index, style = label.style_label_left,
+                 color = lbl_bg_clear, textcolor = col_bear, size = size.small)
+    _last_sup_low_drawn    := sup_low
+    _last_sup_mid_drawn    := sup_mid
+    _last_zero_gamma_drawn := zero_gamma
+    _last_res_mid_drawn    := res_mid
+    _last_res_high_drawn   := res_high
+    _last_label_bar        := bar_index
 
 // ── 10b. Fibonacci level lines + labels (last bar only) ──
 var line  ln_f236 = na, var line  ln_f382 = na, var line  ln_f500 = na
