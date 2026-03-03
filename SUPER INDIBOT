@@ -548,4 +548,4 @@ if showDashboard and barstate.islast
     table.cell(dashboardTable, 1, 6, status4Hour, text_color=color.black, bgcolor=color4Hour, text_size=size.small)
 
     table.cell(dashboardTable, 0, 7, "Daily",  text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 7, statusDaily, text_color=color.black, bgcolor=colorDaily, text_size=size.s
+    table.cell(dashboardTable, 1, 7, statusDaily, text_color=color.black, bgcolor=colorDaily, text_size=size.small)
