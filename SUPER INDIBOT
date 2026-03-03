@@ -1,5 +1,20 @@
 
 
+// ============================================================
+// SUPER INDIBOT
+// Version     : 2.0
+// Author      : fai9love
+// Updated     : 2026-03-03
+// Platform    : TradingView Pine Script v6
+// Description :
+//   EMA ribbon indicator with multi-symbol screener,
+//   multi-timeframe trend dashboard, and automated
+//   TP/SL trade management with breakeven logic.
+// Changelog   :
+//   v2.0 — Applied full code quality pass: bug fixes,
+//           style constants, refactored helpers,
+//           breakeven label fix, dead code removal.
+// ============================================================
 //@version=6
 indicator("SUPER INDIBOT ", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
 
@@ -58,10 +73,15 @@ symbol8 = input.symbol("NSE:HAVELLS",   "Symbol 8", group="Screener Symbols")
 symbol9 = input.symbol("NSE:ITC",       "Symbol 9", group="Screener Symbols")
 
 // ============================================================
-// === CONSTANTS
+// === CONSTANTS & STYLE
 // ============================================================
-// FIX #9 — Replace 3× hardcoded magic number with a single constant
-int LABEL_OFFSET = 10
+const int   LABEL_OFFSET  = 10           // bars to extend lines/labels to the right
+const color C_HEADER_BG   = #03f7ff      // table header background
+const color C_ENTRY_LINE  = #fff100      // entry line / label colour
+const color C_TP_LINE     = #00ff00      // TP line colour (active)
+const color C_BULL        = #00ff00      // bullish signal colour
+const color C_BEAR        = #FF0000      // bearish signal colour
+const color C_LABEL_TXT   = color.black  // all table label text colour
 
 // ============================================================
 // === EMA CALCULATIONS ===
@@ -85,9 +105,9 @@ shortSignal = ta.crossover(ema8, ema2)
 // ============================================================
 // === PLOTS — EMA Ribbon ===
 // ============================================================
-// FIX #8 — p1 and p8 are now used by fill() below; p2 kept for future use
+// p1 and p8 used by fill() below
 p1 = plot(ema1, color=showRibbon ? (isBullish ? #1573d4 : color.gray) : na, linewidth=2, title="EMA 1")
-p2 = plot(ema2, color=showRibbon ? (isBullish ? #3096ff : color.gray) : na, linewidth=2, title="EMA 2")
+plot(ema2, color=showRibbon ? (isBullish ? #3096ff : color.gray) : na, linewidth=2, title="EMA 2")
 plot(ema3, color=showRibbon ? (isBullish ? #57abff : color.gray) : na, linewidth=2, title="EMA 3")
 plot(ema4, color=showRibbon ? (isBullish ? #85c2ff : color.gray) : na, linewidth=2, title="EMA 4")
 plot(ema5, color=showRibbon ? (isBullish ? #9bcdff : color.gray) : na, linewidth=2, title="EMA 5")
@@ -121,6 +141,7 @@ var float          plotSLLevelVal    = na
 var float          plotTopTPLevelVal = na       // FIX #5 — replaces plotTP4LevelVal
 var box            tpBox             = na
 var box            slBox             = na
+var array<bool>    prevTPHitStatus   = array.new<bool>()
 
 atr = ta.atr(atrLen)
 
@@ -129,34 +150,11 @@ atr = ta.atr(atrLen)
 // ============================================================
 if longSignal or shortSignal
     // --- Clean up previous trade drawings ---
-    if not na(signalLabel)
-        label.delete(signalLabel)
-
-    if array.size(tpLines) > 0
-        for i = 0 to array.size(tpLines) - 1
-            line.delete(array.get(tpLines, i))
-    array.clear(tpLines)
-
-    if not na(slLine)
-        line.delete(slLine)
-        slLine := na
-
-    if not na(entryLine)
-        line.delete(entryLine)
-        entryLine := na
-
-    if array.size(rightLabels) > 0
-        for i = 0 to array.size(rightLabels) - 1
-            label.delete(array.get(rightLabels, i))
-    array.clear(rightLabels)
-
-    if not na(tpBox)
-        box.delete(tpBox)
-    tpBox := na
-
-    if not na(slBox)
-        box.delete(slBox)
-    slBox := na
+    cleanupTrade()
+    slLine    := na
+    entryLine := na
+    tpBox     := na
+    slBox     := na
 
     // --- Initialize new trade ---
     tradeActive    := true
@@ -194,20 +192,20 @@ if longSignal or shortSignal
     if showTP_SL_Lines
         entryRightLabel = label.new(xRightInitial, entry,
              "ENTRY " + str.tostring(entry, format.mintick),
-             style=label.style_label_left, color=#fff100, textcolor=color.black, size=size.normal)
+             style=label.style_label_left, color=C_ENTRY_LINE, textcolor=C_LABEL_TXT, size=size.normal)
         array.push(rightLabels, entryRightLabel)
         entryLine := line.new(bar_index, entry, xRightInitial, entry,
-             color=#fff100, style=line.style_solid, width=2)
+             color=C_ENTRY_LINE, style=line.style_solid, width=2)
 
         for i = 0 to array.size(currentTPLevels) - 1
             yVal    = array.get(currentTPLevels, i)
             tpLine  = line.new(bar_index, yVal, xRightInitial, yVal,
-                 color=#00ff00, style=line.style_solid, width=2)
+                 color=C_TP_LINE, style=line.style_solid, width=2)
             array.push(tpLines, tpLine)
 
             tpLabelText  = "TP " + str.tostring(i + 1) + " : " + str.tostring(yVal, format.mintick)
             tpRightLabel = label.new(xRightInitial, yVal, tpLabelText,
-                 style=label.style_label_left, color=#00ff00, textcolor=color.black, size=size.normal)
+                 style=label.style_label_left, color=C_TP_LINE, textcolor=C_LABEL_TXT, size=size.normal)
             array.push(rightLabels, tpRightLabel)
 
         slLine := line.new(bar_index, currentSLLevel, xRightInitial, currentSLLevel,
@@ -289,13 +287,29 @@ if tradeActive and showTP_SL_Lines
             if not na(slLine)
                 line.set_y1(slLine, currentSLLevel)
                 line.set_y2(slLine, currentSLLevel)
+            // FIX C3 — Update SL right-label text and slBox when breakeven is triggered
+            if array.size(rightLabels) > 0
+                int slLabelIdx = array.size(rightLabels) - 1
+                if not na(array.get(rightLabels, slLabelIdx))
+                    label.set_text(array.get(rightLabels, slLabelIdx),
+                         "BE : " + str.tostring(currentSLLevel, format.mintick))
+                    label.set_y(array.get(rightLabels, slLabelIdx), currentSLLevel)
+                    if not na(slBox)
+                        box.set_top(slBox,    math.max(plotEntryLevelVal, currentSLLevel))
+                        box.set_bottom(slBox, math.min(plotEntryLevelVal, currentSLLevel))
 
-    // FIX #12 — Visually fade TP lines that have been hit
+    // FIX #12 — Visually fade TP lines that have been hit (FIX P2: only update on status change)
     for i = 0 to array.size(tpLines) - 1
         if not na(array.get(tpLines, i))
-            isHit    = i < array.size(tpHitStatus) and array.get(tpHitStatus, i)
-            tpColor  = isHit ? color.new(color.green, 65) : color.new(#00ff00, 0)
-            line.set_color(array.get(tpLines, i), tpColor)
+            isHit   = i < array.size(tpHitStatus) and array.get(tpHitStatus, i)
+            prevHit = i < array.size(prevTPHitStatus) and array.get(prevTPHitStatus, i)
+            if isHit != prevHit
+                tpColor = isHit ? color.new(color.green, 65) : color.new(C_TP_LINE, 0)
+                line.set_color(array.get(tpLines, i), tpColor)
+                if i < array.size(prevTPHitStatus)
+                    array.set(prevTPHitStatus, i, isHit)
+                else
+                    array.push(prevTPHitStatus, isHit)
 
     if slHit or allTPsHit
         tradeActive := false
@@ -352,17 +366,37 @@ getSymbolName(fullSymbol) =>
     parts = str.split(fullSymbol, ":")
     array.size(parts) > 1 ? array.get(parts, 1) : fullSymbol
 
-// FIX #4 — Multi-timeframe trend helper: returns bullish bool for a given TF string
-// Avoids duplicating switch blocks for each of the 3 combined-trend inputs
-getTFBullish(tfString, e2_5, e8_5, e2_15, e8_15, e2_30, e8_30, e2_60, e8_60, e2_240, e8_240, e2_D, e8_D) =>
-    switch tfString
-        "5"   => e8_5   < e2_5
-        "15"  => e8_15  < e2_15
-        "30"  => e8_30  < e2_30
-        "60"  => e8_60  < e2_60
-        "240" => e8_240 < e2_240   // FIX #4 — "240" now handled
-        "D"   => e8_D   < e2_D
-        =>       false
+cleanupTrade() =>
+    if not na(signalLabel)
+        label.delete(signalLabel)
+    for i = 0 to array.size(tpLines) - 1
+        line.delete(array.get(tpLines, i))
+    array.clear(tpLines)
+    if not na(slLine)
+        line.delete(slLine)
+    if not na(entryLine)
+        line.delete(entryLine)
+    for i = 0 to array.size(rightLabels) - 1
+        label.delete(array.get(rightLabels, i))
+    array.clear(rightLabels)
+    if not na(tpBox)
+        box.delete(tpBox)
+    if not na(slBox)
+        box.delete(slBox)
+    array.clear(prevTPHitStatus)
+
+// FIX S3 — Array-based multi-timeframe trend helper (replaces 12-arg getTFBullish)
+// ema2Arr / ema8Arr ordered: [5m=0, 15m=1, 30m=2, 60m=3, 240m=4, D=5]
+getTFBullishByIndex(tfString, ema2Arr, ema8Arr) =>
+    idx = switch tfString
+        "5"   => 0
+        "15"  => 1
+        "30"  => 2
+        "60"  => 3
+        "240" => 4
+        "D"   => 5
+        =>      -1
+    idx >= 0 ? array.get(ema8Arr, idx) < array.get(ema2Arr, idx) : false
 
 // ============================================================
 // === SCREENER — SECURITY REQUESTS ===
@@ -424,6 +458,11 @@ sym9_shortCross = ta.crossover(sym9_ema8, sym9_ema2)
 // === SCREENER TABLE ===
 // FIX #3 — var table declared at top level, not inside conditional
 // ============================================================
+var array<string> symbolNames = array.from(
+     getSymbolName(symbol1), getSymbolName(symbol2), getSymbolName(symbol3),
+     getSymbolName(symbol4), getSymbolName(symbol5), getSymbolName(symbol6),
+     getSymbolName(symbol7), getSymbolName(symbol8), getSymbolName(symbol9))
+
 var table screenerTable = table.new(getTablePosition(screenerPosition), 2, maxSymbols + 1,
      bgcolor      = color.new(color.rgb(33, 33, 33), 80),
      border_width = 2, border_color = color.new(widgetBorderColor, 0),
@@ -431,15 +470,9 @@ var table screenerTable = table.new(getTablePosition(screenerPosition), 2, maxSy
 
 if showScreener and barstate.islast
     table.cell(screenerTable, 0, 0, "SCREENER",
-         text_color=color.black, bgcolor=#03f7ff,
+         text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,
          text_size=size.small, text_halign=text.align_center)
     table.merge_cells(screenerTable, 0, 0, 1, 0)
-
-    // FIX #10 — Consistent color.black used throughout (removed color.rgb(0,0,0) variants)
-    symbolNames = array.from(
-         getSymbolName(symbol1), getSymbolName(symbol2), getSymbolName(symbol3),
-         getSymbolName(symbol4), getSymbolName(symbol5), getSymbolName(symbol6),
-         getSymbolName(symbol7), getSymbolName(symbol8), getSymbolName(symbol9))
 
     ema2Values  = array.from(sym1_ema2, sym2_ema2, sym3_ema2, sym4_ema2, sym5_ema2,
                              sym6_ema2, sym7_ema2, sym8_ema2, sym9_ema2)
@@ -465,12 +498,12 @@ if showScreener and barstate.islast
         signalStatus = longCross  ? "Long"    :
                        shortCross ? "Short"   :
                        symIsBullish ? "Bullish" : "Bearish"
-        signalColor  = longCross  ? color.new(#00ff00, 0) :
-                       shortCross ? color.new(#ff0000, 0) :
+        signalColor  = longCross  ? color.new(C_BULL, 0) :
+                       shortCross ? color.new(C_BEAR, 0) :
                        symIsBullish ? color.new(#ffff00, 0) : color.new(#ff6600, 0)
 
-        table.cell(screenerTable, 0, i + 1, symbolName,    text_color=color.black, bgcolor=#03f7ff,    text_size=size.small)
-        table.cell(screenerTable, 1, i + 1, signalStatus,  text_color=color.black, bgcolor=signalColor, text_size=size.small)
+        table.cell(screenerTable, 0, i + 1, symbolName,    text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,    text_size=size.small)
+        table.cell(screenerTable, 1, i + 1, signalStatus,  text_color=C_LABEL_TXT, bgcolor=signalColor, text_size=size.small)
 
 // ============================================================
 // === TREND ANALYSIS DASHBOARD ===
@@ -484,30 +517,26 @@ var table dashboardTable = table.new(getTablePosition(dashboardPosition), 2, 8,
 
 if showDashboard and barstate.islast
     table.cell(dashboardTable, 0, 0, "TREND ANALYSIS",
-         text_color=color.black, bgcolor=#03f7ff,
+         text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,
          text_size=size.small, text_halign=text.align_center)
     table.merge_cells(dashboardTable, 0, 0, 1, 0)
 
-    // FIX #4 — All three combined-trend inputs now use the shared helper function
-    // which correctly handles "240"; no duplicated switch blocks
-    tf1Bullish = getTFBullish(combinedTrendTF1,
-         tf5_ema2, tf5_ema8, tf15_ema2, tf15_ema8, tf30_ema2, tf30_ema8,
-         tf60_ema2, tf60_ema8, tf240_ema2, tf240_ema8, tfD_ema2, tfD_ema8)
-    tf2Bullish = getTFBullish(combinedTrendTF2,
-         tf5_ema2, tf5_ema8, tf15_ema2, tf15_ema8, tf30_ema2, tf30_ema8,
-         tf60_ema2, tf60_ema8, tf240_ema2, tf240_ema8, tfD_ema2, tfD_ema8)
-    tf3Bullish = getTFBullish(combinedTrendTF3,
-         tf5_ema2, tf5_ema8, tf15_ema2, tf15_ema8, tf30_ema2, tf30_ema8,
-         tf60_ema2, tf60_ema8, tf240_ema2, tf240_ema8, tfD_ema2, tfD_ema8)
+    // FIX S3 — Array-based lookup replaces 12-arg getTFBullish calls
+    ema2Arr = array.from(tf5_ema2, tf15_ema2, tf30_ema2, tf60_ema2, tf240_ema2, tfD_ema2)
+    ema8Arr = array.from(tf5_ema8, tf15_ema8, tf30_ema8, tf60_ema8, tf240_ema8, tfD_ema8)
+
+    tf1Bullish = getTFBullishByIndex(combinedTrendTF1, ema2Arr, ema8Arr)
+    tf2Bullish = getTFBullishByIndex(combinedTrendTF2, ema2Arr, ema8Arr)
+    tf3Bullish = getTFBullishByIndex(combinedTrendTF3, ema2Arr, ema8Arr)
 
     bullishCount     = (tf1Bullish ? 1 : 0) + (tf2Bullish ? 1 : 0) + (tf3Bullish ? 1 : 0)
     isOverallBullish = bullishCount >= 2
     combinedStatus   = isOverallBullish ? "Bullish" : "Bearish"
-    combinedColor    = isOverallBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
+    combinedColor    = isOverallBullish ? color.new(C_BULL, 0) : color.new(C_BEAR, 0)
 
     // FIX #10 — All text_color uses color.black consistently
-    table.cell(dashboardTable, 0, 1, "Status",        text_color=color.black, bgcolor=#03f7ff,      text_size=size.small)
-    table.cell(dashboardTable, 1, 1, combinedStatus,  text_color=color.black, bgcolor=combinedColor, text_size=size.small)
+    table.cell(dashboardTable, 0, 1, "Status",        text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,      text_size=size.small)
+    table.cell(dashboardTable, 1, 1, combinedStatus,  text_color=C_LABEL_TXT, bgcolor=combinedColor, text_size=size.small)
 
     // Individual timeframe rows
     tf5MinBullish  = tf5_ema8   < tf5_ema2
@@ -524,28 +553,28 @@ if showDashboard and barstate.islast
     status4Hour = tf4HourBullish ? "Bullish" : "Bearish"  // FIX #13
     statusDaily = tfDailyBullish ? "Bullish" : "Bearish"
 
-    color5Min  = tf5MinBullish  ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color15Min = tf15MinBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color30Min = tf30MinBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color1Hour = tf1HourBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color4Hour = tf4HourBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)  // FIX #13
-    colorDaily = tfDailyBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
+    color5Min  = tf5MinBullish  ? color.new(C_BULL, 0) : color.new(C_BEAR, 0)
+    color15Min = tf15MinBullish ? color.new(C_BULL, 0) : color.new(C_BEAR, 0)
+    color30Min = tf30MinBullish ? color.new(C_BULL, 0) : color.new(C_BEAR, 0)
+    color1Hour = tf1HourBullish ? color.new(C_BULL, 0) : color.new(C_BEAR, 0)
+    color4Hour = tf4HourBullish ? color.new(C_BULL, 0) : color.new(C_BEAR, 0)
+    colorDaily = tfDailyBullish ? color.new(C_BULL, 0) : color.new(C_BEAR, 0)
 
-    table.cell(dashboardTable, 0, 2, "5 Min",  text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 2, status5Min,  text_color=color.black, bgcolor=color5Min,  text_size=size.small)
+    table.cell(dashboardTable, 0, 2, "5 Min",  text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,   text_size=size.small)
+    table.cell(dashboardTable, 1, 2, status5Min,  text_color=C_LABEL_TXT, bgcolor=color5Min,  text_size=size.small)
 
-    table.cell(dashboardTable, 0, 3, "15 Min", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 3, status15Min, text_color=color.black, bgcolor=color15Min, text_size=size.small)
+    table.cell(dashboardTable, 0, 3, "15 Min", text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,   text_size=size.small)
+    table.cell(dashboardTable, 1, 3, status15Min, text_color=C_LABEL_TXT, bgcolor=color15Min, text_size=size.small)
 
-    table.cell(dashboardTable, 0, 4, "30 Min", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 4, status30Min, text_color=color.black, bgcolor=color30Min, text_size=size.small)
+    table.cell(dashboardTable, 0, 4, "30 Min", text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,   text_size=size.small)
+    table.cell(dashboardTable, 1, 4, status30Min, text_color=C_LABEL_TXT, bgcolor=color30Min, text_size=size.small)
 
-    table.cell(dashboardTable, 0, 5, "1 Hour", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 5, status1Hour, text_color=color.black, bgcolor=color1Hour, text_size=size.small)
+    table.cell(dashboardTable, 0, 5, "1 Hour", text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,   text_size=size.small)
+    table.cell(dashboardTable, 1, 5, status1Hour, text_color=C_LABEL_TXT, bgcolor=color1Hour, text_size=size.small)
 
     // FIX #13 — 4-Hour row (row 6); Daily shifted to row 7
-    table.cell(dashboardTable, 0, 6, "4 Hour", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 6, status4Hour, text_color=color.black, bgcolor=color4Hour, text_size=size.small)
+    table.cell(dashboardTable, 0, 6, "4 Hour", text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,   text_size=size.small)
+    table.cell(dashboardTable, 1, 6, status4Hour, text_color=C_LABEL_TXT, bgcolor=color4Hour, text_size=size.small)
 
-    table.cell(dashboardTable, 0, 7, "Daily",  text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 7, statusDaily, text_color=color.black, bgcolor=colorDaily, text_size=size.s
+    table.cell(dashboardTable, 0, 7, "Daily",  text_color=C_LABEL_TXT, bgcolor=C_HEADER_BG,   text_size=size.small)
+    table.cell(dashboardTable, 1, 7, statusDaily, text_color=C_LABEL_TXT, bgcolor=colorDaily, text_size=size.small)
