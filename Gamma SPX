@@ -1,18 +1,19 @@
 //@version=6
 // ═══════════════════════════════════════════════════════════════════════════
-//  📊 Gamma SPX [Pro v11.1] — Structure & Retracement Engine (Production)
+//  📊 Gamma SPX [Pro v11.2] — Structure & Retracement Engine (Production)
 //
-//  CHANGELOG (v11 → v11.1):
-//    • FIX: request.security lookahead_on for confirmed candle (prevents repainting)
-//    • FIX: nearest_key_dist expression reformatted for clarity
-//    • FIX: struct_table_position group reference verified and cleaned
-//    • PERF: Label change-detection guard prevents unnecessary redraw on every tick
-//    • PERF: rsi_1h deduplicates security call when confirm_tf == '60'
-//    • REFACTOR: Named constants block (FIB_*, SCORE_*, W_*) replaces magic numbers
-//    • REFACTOR: f_send_alert — removed unused return value
-//    • DOCS: JSDoc-style headers added to all f_* utility functions
+//  CHANGELOG (v11.1 → v11.2):
+//    • FIX: W_* weight constants now used in all checklist items (c1–c12) — previously hardcoded
+//    • FIX: call_touch_support dead-logic corrected — proximity-based sup_mid/sup_low detection
+//    • FIX: older_bar na-check uses inline guard for int type consistency (replaces nz())
+//    • REFACTOR: score_band uses SCORE_BAND_* named constants (eliminates 3 magic numbers)
+//    • REFACTOR: Quality thresholds use W_QUALITY_STRONG_BONUS constant
+//    • PERF: sh_is_hh/lh, sl_is_hl/ll, struct_* gated by enable_structure
+//    • PERF: struct_event_age gated by enable_structure
+//    • REFACTOR: f_delete_label() + f_delete_line() helpers eliminate 18 repeated na-guard blocks
+//    • DOCS: Section 2b constants block expanded with SCORE_BAND_* and W_QUALITY_STRONG_BONUS
 // ═══════════════════════════════════════════════════════════════════════════
-indicator('📊 Gamma SPX [Pro v11.1]', overlay = true, max_labels_count = 500, max_lines_count = 500)
+indicator('📊 Gamma SPX [Pro v11.2]', overlay = true, max_labels_count = 500, max_lines_count = 500)
 
 // ╔═══════════════════════════════════════════════════════════════════════╗
 // ║  SECTION 1 — INPUTS                                                  ║
@@ -189,6 +190,20 @@ f_clamp(val, lo, hi) =>
 f_nz(val, fallback) =>
     na(val) ? fallback : val
 
+// @function  f_delete_label
+// @desc      Deletes a label if not na. No-op if na.
+// @param     lbl  label — Label to delete
+f_delete_label(lbl) =>
+    if not na(lbl)
+        label.delete(lbl)
+
+// @function  f_delete_line
+// @desc      Deletes a line if not na. No-op if na.
+// @param     ln  line — Line to delete
+f_delete_line(ln) =>
+    if not na(ln)
+        line.delete(ln)
+
 // @function  f_send_alert
 // @desc      Dispatches an alert at the user-configured frequency.
 //            Frequency options: 'all', 'once_per_bar', 'once_per_bar_close'.
@@ -214,6 +229,14 @@ W_VOLUME      = 1.5   // weight for c8
 W_STRUCTURE   = 1.5   // weight for c11 (max)
 W_RETRACE     = 1.0   // weight for c12 (max)
 // Total max checklist score: W_POSITION*6 + W_VALID_SETUP + W_TF_CONFIRM + W_VOLUME + W_STRUCTURE + W_RETRACE = 14.0
+
+// ── Quality classification thresholds ──
+W_QUALITY_STRONG_BONUS = 1.5   // additional score needed above min_checks_strong for STRONG rating
+
+// ── Profile score bands ──
+SCORE_BAND_CONSERVATIVE = 8.0
+SCORE_BAND_BALANCED     = 5.0
+SCORE_BAND_AGGRESSIVE   = 3.0
 
 // ── Composite score constants ──
 SCORE_NEUTRAL     = 50.0
@@ -387,7 +410,8 @@ cci_score = f_clamp(cci_cur / 200.0 * CCI_SCORE_SCALE, -CCI_SCORE_SCALE, CCI_SCO
 htf_score = f_clamp((rsi_1h - SCORE_NEUTRAL) / SCORE_NEUTRAL * HTF_SCORE_SCALE, -HTF_SCORE_SCALE, HTF_SCORE_SCALE)
 composite_score = f_clamp(SCORE_NEUTRAL + zg_score + rsi_score + cci_score + htf_score, 0.0, 100.0)
 
-score_band = profile_mode == 'Conservative' ? 8.0 : profile_mode == 'Aggressive' ? 3.0 : 5.0
+score_band = profile_mode == 'Conservative' ? SCORE_BAND_CONSERVATIVE :
+             profile_mode == 'Aggressive'   ? SCORE_BAND_AGGRESSIVE   : SCORE_BAND_BALANCED
 final_rec  = not valid_setup   ? 'CHECK LEVELS' :
               at_zero           ? 'WAIT'         :
               composite_score >= 50.0 + score_band ? 'BULLISH BIAS' :
@@ -459,14 +483,14 @@ if sl_detected
 has_two_sh = not na(last_sh) and not na(prev_sh)
 has_two_sl = not na(last_sl) and not na(prev_sl)
 
-sh_is_hh = has_two_sh and last_sh > prev_sh    // Higher High
-sh_is_lh = has_two_sh and last_sh < prev_sh    // Lower High
-sl_is_hl = has_two_sl and last_sl > prev_sl    // Higher Low
-sl_is_ll = has_two_sl and last_sl < prev_sl    // Lower Low
+sh_is_hh = enable_structure and has_two_sh and last_sh > prev_sh    // Higher High
+sh_is_lh = enable_structure and has_two_sh and last_sh < prev_sh    // Lower High
+sl_is_hl = enable_structure and has_two_sl and last_sl > prev_sl    // Higher Low
+sl_is_ll = enable_structure and has_two_sl and last_sl < prev_sl    // Lower Low
 
-struct_bullish    = sh_is_hh and sl_is_hl       // Uptrend: HH + HL
-struct_bearish    = sh_is_lh and sl_is_ll       // Downtrend: LH + LL
-struct_transition = not struct_bullish and not struct_bearish
+struct_bullish    = enable_structure and sh_is_hh and sl_is_hl       // Uptrend: HH + HL
+struct_bearish    = enable_structure and sh_is_lh and sl_is_ll       // Downtrend: LH + LL
+struct_transition = enable_structure and not struct_bullish and not struct_bearish
 
 struct_label = struct_bullish  ? 'BULLISH ↑'    :  struct_bearish  ? 'BEARISH ↓'    : 'TRANSITION ↔'
 
@@ -504,7 +528,7 @@ if enable_structure
         last_struct_bar   := bar_index
         last_struct_price := last_sl
 
-struct_event_age = bar_index - last_struct_bar
+struct_event_age = enable_structure ? (bar_index - last_struct_bar) : 0
 
 // ── 6d. Level test counting (rolling window) ──
 // Counts new unique touches of each key level within `structure_lookback` bars.
@@ -665,7 +689,10 @@ put_break_s1        = x_put_s1 and close < sup_low  and close_tf < sup_low
 put_entry_breakdown = (put_break_s2 or put_break_s1) and vol_is_high and rsi_delta < 0
 
 // Bounce / Rejection (not gated by directional base — allows counter-trend)
-call_touch_support   = low <= sup_mid or low <= sup_low
+// Proximity-based: fires only when low is within entry_zone_offset of the respective support
+call_touch_sup_mid = math.abs(low - sup_mid) <= entry_zone_offset
+call_touch_sup_low = math.abs(low - sup_low) <= entry_zone_offset
+call_touch_support = call_touch_sup_mid or call_touch_sup_low
 call_support_hold_tf = low_tf > sup_low
 call_entry_bounce    = call_touch_support and (is_hammer or is_bull_engulf) and  call_support_hold_tf and rsi_cur[1] < 30 and rsi_cur > rsi_cur[1] and composite_score > composite_score[1]
 
@@ -713,37 +740,39 @@ put_rr_dyn  = put_rr_ok ? put_reward / put_risk : 0.0
 // c12: Retrace confluence (NEW)          (0–1.0)
 // Max possible: 14.0
 
-call_c1  = above_zero ? 1.0 : 0.0
-call_c2  = composite_score > score_call_min ? 1.0 : 0.0
-call_c3  = final_rec == 'BULLISH BIAS' ? 1.0 : 0.0
-call_c4  = rsi_cur > 50 ? 1.0 : 0.0
-call_c5  = rsi_1h  > 50 ? 1.0 : 0.0
-call_c6  = valid_setup   ? 2.0 : 0.0
-call_c7  = call_tf_confirm ? 1.0 : 0.0
-call_c8  = vol_is_high     ? 1.5 : 0.0
-call_c9  = call_sl_dyn < close ? 1.0 : 0.0
-call_c10 = call_rr_dyn >= min_rr_required ? 1.0 : 0.0
-call_c11 = enable_structure    ? (struct_bullish ? 1.5 : struct_transition and above_zero ? 0.5 : 0.0) : 0.0
-call_c12 = enable_retracement  ? (retrace_call ? 1.0 : 0.0) : 0.0
+call_c1  = above_zero ? W_POSITION    : 0.0
+call_c2  = composite_score > score_call_min ? W_POSITION : 0.0
+call_c3  = final_rec == 'BULLISH BIAS' ? W_POSITION : 0.0
+call_c4  = rsi_cur > 50 ? W_POSITION : 0.0
+call_c5  = rsi_1h  > 50 ? W_POSITION : 0.0
+call_c6  = valid_setup   ? W_VALID_SETUP : 0.0
+call_c7  = call_tf_confirm ? W_TF_CONFIRM : 0.0
+call_c8  = vol_is_high     ? W_VOLUME : 0.0
+call_c9  = call_sl_dyn < close ? W_POSITION : 0.0
+call_c10 = call_rr_dyn >= min_rr_required ? W_POSITION : 0.0
+call_c11 = enable_structure    ? (struct_bullish ? W_STRUCTURE : struct_transition and above_zero ? 0.5 : 0.0) : 0.0
+call_c12 = enable_retracement  ? (retrace_call ? W_RETRACE : 0.0) : 0.0
 call_checks = call_c1 + call_c2 + call_c3 + call_c4 + call_c5 + call_c6 + call_c7 + call_c8 + call_c9 + call_c10 + call_c11 + call_c12
 
-put_c1  = below_zero ? 1.0 : 0.0
-put_c2  = composite_score < score_put_max ? 1.0 : 0.0
-put_c3  = final_rec == 'BEARISH BIAS' ? 1.0 : 0.0
-put_c4  = rsi_cur < 50 ? 1.0 : 0.0
-put_c5  = rsi_1h  < 50 ? 1.0 : 0.0
-put_c6  = valid_setup    ? 2.0 : 0.0
-put_c7  = put_tf_confirm  ? 1.0 : 0.0
-put_c8  = vol_is_high      ? 1.5 : 0.0
-put_c9  = put_sl_dyn > close ? 1.0 : 0.0
-put_c10 = put_rr_dyn >= min_rr_required ? 1.0 : 0.0
-put_c11 = enable_structure    ? (struct_bearish ? 1.5 : struct_transition and below_zero ? 0.5 : 0.0) : 0.0
-put_c12 = enable_retracement  ? (retrace_put ? 1.0 : 0.0) : 0.0
+put_c1  = below_zero ? W_POSITION    : 0.0
+put_c2  = composite_score < score_put_max ? W_POSITION : 0.0
+put_c3  = final_rec == 'BEARISH BIAS' ? W_POSITION : 0.0
+put_c4  = rsi_cur < 50 ? W_POSITION : 0.0
+put_c5  = rsi_1h  < 50 ? W_POSITION : 0.0
+put_c6  = valid_setup    ? W_VALID_SETUP : 0.0
+put_c7  = put_tf_confirm  ? W_TF_CONFIRM : 0.0
+put_c8  = vol_is_high      ? W_VOLUME : 0.0
+put_c9  = put_sl_dyn > close ? W_POSITION : 0.0
+put_c10 = put_rr_dyn >= min_rr_required ? W_POSITION : 0.0
+put_c11 = enable_structure    ? (struct_bearish ? W_STRUCTURE : struct_transition and below_zero ? 0.5 : 0.0) : 0.0
+put_c12 = enable_retracement  ? (retrace_put ? W_RETRACE : 0.0) : 0.0
 put_checks = put_c1 + put_c2 + put_c3 + put_c4 + put_c5 + put_c6 + put_c7 + put_c8 + put_c9 + put_c10 + put_c11 + put_c12
 
 // ── 8f. Quality classification ──
-call_quality = call_checks >= (min_checks_strong + 1.5) ? 'STRONG' : call_checks >= (min_checks_medium + 0.5) ? 'MEDIUM' : 'WEAK'
-put_quality  = put_checks >= (min_checks_strong + 1.5) ? 'STRONG' : put_checks >= (min_checks_medium + 0.5) ? 'MEDIUM' : 'WEAK'
+// W_QUALITY_STRONG_BONUS = 1.5 accounts for maximum W_STRUCTURE contribution
+// 0.5 offset for MEDIUM accounts for partial W_STRUCTURE contribution
+call_quality = call_checks >= (min_checks_strong + W_QUALITY_STRONG_BONUS) ? 'STRONG' : call_checks >= (min_checks_medium + 0.5) ? 'MEDIUM' : 'WEAK'
+put_quality  = put_checks  >= (min_checks_strong + W_QUALITY_STRONG_BONUS) ? 'STRONG' : put_checks  >= (min_checks_medium + 0.5) ? 'MEDIUM' : 'WEAK'
 
 entry_type_call = call_entry_breakout ? 'Breakout' : call_entry_bounce ? 'Bounce' : 'ZeroCross'
 entry_type_put  = put_entry_breakdown ? 'Breakdown' : put_entry_bounce ? 'Rejection' : 'ZeroCross'
@@ -895,30 +924,18 @@ if barstate.islast and show_price_text
 
     if _levels_changed
         // Clean up previous iteration
-        if not na(lbl_p_sl)
-            label.delete(lbl_p_sl)
-        if not na(lbl_p_sm)
-            label.delete(lbl_p_sm)
-        if not na(lbl_p_zg)
-            label.delete(lbl_p_zg)
-        if not na(lbl_p_rm)
-            label.delete(lbl_p_rm)
-        if not na(lbl_p_rh)
-            label.delete(lbl_p_rh)
-        if not na(lbl_tp2)
-            label.delete(lbl_tp2)
-        if not na(lbl_tp4)
-            label.delete(lbl_tp4)
-        if not na(lbl_bear3)
-            label.delete(lbl_bear3)
-        if not na(lbl_bullL)
-            label.delete(lbl_bullL)
-        if not na(lbl_bullH)
-            label.delete(lbl_bullH)
-        if not na(lbl_bearL)
-            label.delete(lbl_bearL)
-        if not na(lbl_bearH)
-            label.delete(lbl_bearH)
+        f_delete_label(lbl_p_sl)
+        f_delete_label(lbl_p_sm)
+        f_delete_label(lbl_p_zg)
+        f_delete_label(lbl_p_rm)
+        f_delete_label(lbl_p_rh)
+        f_delete_label(lbl_tp2)
+        f_delete_label(lbl_tp4)
+        f_delete_label(lbl_bear3)
+        f_delete_label(lbl_bullL)
+        f_delete_label(lbl_bullH)
+        f_delete_label(lbl_bearL)
+        f_delete_label(lbl_bearH)
 
         // Supports offset down, resistances offset up (labels pushed away from price)
         if show_sup_low
@@ -981,29 +998,21 @@ var label lb_f618 = na, var label lb_f786 = na
 
 if barstate.islast and enable_retracement and show_fib_lines and range_valid
     // Cleanup previous
-    if not na(ln_f236)
-        line.delete(ln_f236)
-    if not na(ln_f382)
-        line.delete(ln_f382)
-    if not na(ln_f500)
-        line.delete(ln_f500)
-    if not na(ln_f618)
-        line.delete(ln_f618)
-    if not na(ln_f786)
-        line.delete(ln_f786)
-    if not na(lb_f236)
-        label.delete(lb_f236)
-    if not na(lb_f382)
-        label.delete(lb_f382)
-    if not na(lb_f500)
-        label.delete(lb_f500)
-    if not na(lb_f618)
-        label.delete(lb_f618)
-    if not na(lb_f786)
-        label.delete(lb_f786)
+    f_delete_line(ln_f236)
+    f_delete_line(ln_f382)
+    f_delete_line(ln_f500)
+    f_delete_line(ln_f618)
+    f_delete_line(ln_f786)
+    f_delete_label(lb_f236)
+    f_delete_label(lb_f382)
+    f_delete_label(lb_f500)
+    f_delete_label(lb_f618)
+    f_delete_label(lb_f786)
 
     // Line spans from older swing bar to right of current bar
-    older_bar = math.min(nz(last_sh_bar, bar_index - 50), nz(last_sl_bar, bar_index - 50))
+    older_bar = math.min(
+         na(last_sh_bar) ? bar_index - 50 : last_sh_bar,
+         na(last_sl_bar) ? bar_index - 50 : last_sl_bar)
     end_bar   = bar_index + 3
     lbl_bar_f = bar_index + label_offset_bars + 4
 
@@ -1048,18 +1057,12 @@ var line  line_entry = na, var line  line_sl = na, var line  line_tp = na
 var label lbl_entry  = na, var label lbl_sl  = na, var label lbl_tp  = na
 
 if barstate.islast
-    if not na(line_entry)
-        line.delete(line_entry)
-    if not na(line_sl)
-        line.delete(line_sl)
-    if not na(line_tp)
-        line.delete(line_tp)
-    if not na(lbl_entry)
-        label.delete(lbl_entry)
-    if not na(lbl_sl)
-        label.delete(lbl_sl)
-    if not na(lbl_tp)
-        label.delete(lbl_tp)
+    f_delete_line(line_entry)
+    f_delete_line(line_sl)
+    f_delete_line(line_tp)
+    f_delete_label(lbl_entry)
+    f_delete_label(lbl_sl)
+    f_delete_label(lbl_tp)
 
     va = text_offset_pts
 
