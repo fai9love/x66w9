@@ -1,0 +1,551 @@
+//@version=5
+indicator("Elliott Wave + Fibonacci Analyzer", shorttitle="EW+Fib", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1: User Inputs
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Trend Detection Group
+htf_tf          = input.timeframe("240",  title="Higher Timeframe",          group="Trend Detection", options=["60","240","D","W"])
+trend_ema_len   = input.int(200,          title="Trend EMA Length",           group="Trend Detection", minval=50, maxval=500)
+
+// Wave Detection Group
+pivot_left      = input.int(10,           title="Pivot Lookback Left",        group="Wave Detection",  minval=3,  maxval=50)
+pivot_right     = input.int(10,           title="Pivot Lookback Right",       group="Wave Detection",  minval=3,  maxval=50)
+wave_sensitivity= input.float(1.0,        title="Wave Sensitivity Multiplier",group="Wave Detection",  minval=0.5,maxval=3.0, step=0.1)
+
+// Fibonacci Group
+show_fib_levels = input.bool(true,        title="Show Fibonacci Levels",      group="Fibonacci")
+fib_w2_retrace  = input.float(0.618,      title="Wave 2 Retracement Ratio",   group="Fibonacci")
+fib_w3_extend   = input.float(1.618,      title="Wave 3 Extension Ratio",     group="Fibonacci")
+fib_w4_retrace  = input.float(0.382,      title="Wave 4 Retracement Ratio",   group="Fibonacci")
+
+// Display Group
+show_wave_labels= input.bool(true,        title="Show Wave Labels",           group="Display")
+show_signals    = input.bool(true,        title="Show Entry/SL Signals",      group="Display")
+show_trend_bg   = input.bool(true,        title="Show Trend Background",      group="Display")
+bull_color      = input.color(color.new(color.teal, 85), title="Bullish Color", group="Display")
+bear_color      = input.color(color.new(color.red,  85), title="Bearish Color", group="Display")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2: Higher-Timeframe Trend Detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Request HTF close and EMA from the chosen higher timeframe
+htf_close = request.security(syminfo.tickerid, htf_tf, close)
+htf_ema   = request.security(syminfo.tickerid, htf_tf, ta.ema(close, trend_ema_len))
+
+// Determine trend direction: +1 = bullish, -1 = bearish
+htf_trend = htf_close > htf_ema ? 1 : -1
+
+// Paint semi-transparent background based on trend
+bgcolor(show_trend_bg ? (htf_trend == 1 ? bull_color : bear_color) : na, title="Trend Background")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3: Pivot Detection (Zigzag Engine)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Detect confirmed pivot highs and lows
+ph = ta.pivothigh(high, pivot_left, pivot_right)
+pl = ta.pivotlow(low,  pivot_left, pivot_right)
+
+// Rolling arrays for last 10 pivot highs (price & bar index)
+var ph_price = array.new<float>(0)
+var ph_bar   = array.new<int>(0)
+
+// Rolling arrays for last 10 pivot lows (price & bar index)
+var pl_price = array.new<float>(0)
+var pl_bar   = array.new<int>(0)
+
+// On a new confirmed pivot high, push to arrays and trim to 10 elements
+if not na(ph)
+    array.push(ph_price, ph)
+    array.push(ph_bar,   bar_index - pivot_right)
+    if array.size(ph_price) > 10
+        array.shift(ph_price)
+        array.shift(ph_bar)
+
+// On a new confirmed pivot low, push to arrays and trim to 10 elements
+if not na(pl)
+    array.push(pl_price, pl)
+    array.push(pl_bar,   bar_index - pivot_right)
+    if array.size(pl_price) > 10
+        array.shift(pl_price)
+        array.shift(pl_bar)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4: Elliott Wave Identification Logic
+// ─────────────────────────────────────────────────────────────────────────────
+
+atr_val = ta.atr(14)
+min_move = wave_sensitivity * atr_val
+
+// Persistent wave pivot variables
+var float w1_start_price = na
+var int   w1_start_bar   = na
+var float w1_end_price   = na
+var int   w1_end_bar     = na
+
+var float w2_end_price   = na
+var int   w2_end_bar     = na
+
+var float w3_end_price   = na
+var int   w3_end_bar     = na
+
+var float w4_end_price   = na
+var int   w4_end_bar     = na
+
+var float w5_end_price   = na
+var int   w5_end_bar     = na
+
+var bool  wave2_valid    = false
+var bool  wave4_valid    = false
+var int   current_wave   = 0   // 0=none,1=W1 done,2=W2 done,...,5=W5 done
+
+// Helper: safely get last element of an array
+f_last_f(arr) =>
+    array.size(arr) > 0 ? array.get(arr, array.size(arr) - 1) : float(na)
+
+f_last_i(arr) =>
+    array.size(arr) > 0 ? array.get(arr, array.size(arr) - 1) : int(na)
+
+// Helper: safely get second-to-last element
+f_prev_f(arr) =>
+    array.size(arr) > 1 ? array.get(arr, array.size(arr) - 2) : float(na)
+
+f_prev_i(arr) =>
+    array.size(arr) > 1 ? array.get(arr, array.size(arr) - 2) : int(na)
+
+// ── Bullish Impulse Wave Detection (htf_trend == 1) ──────────────────────────
+
+if htf_trend == 1
+
+    // Wave 1: move from the most-recent pivot low to the next pivot high
+    if current_wave == 0 and array.size(pl_price) >= 1 and array.size(ph_price) >= 1
+        _w0_price = f_last_f(pl_price)
+        _w0_bar   = f_last_i(pl_bar)
+        _w1_price = f_last_f(ph_price)
+        _w1_bar   = f_last_i(ph_bar)
+        // W1 high must come after W0 low and be large enough
+        if not na(_w0_price) and not na(_w1_price) and _w1_bar > _w0_bar and (_w1_price - _w0_price) >= min_move
+            w1_start_price := _w0_price
+            w1_start_bar   := _w0_bar
+            w1_end_price   := _w1_price
+            w1_end_bar     := _w1_bar
+            current_wave   := 1
+
+    // Wave 2: retracement from W1 high; must be between 50% and 78.6% of W1
+    if current_wave == 1 and not na(w1_start_price)
+        _w1_range  = w1_end_price - w1_start_price
+        _w2_price  = f_last_f(pl_price)
+        _w2_bar    = f_last_i(pl_bar)
+        if not na(_w2_price) and _w2_bar > w1_end_bar
+            _retrace = (w1_end_price - _w2_price) / _w1_range
+            if _retrace >= 0.50 and _retrace <= 0.786
+                w2_end_price := _w2_price
+                w2_end_bar   := _w2_bar
+                // Valid near primary fib_w2_retrace with ±5% tolerance
+                wave2_valid  := math.abs(_retrace - fib_w2_retrace) <= 0.05
+                current_wave := 2
+
+    // Wave 3: impulse from W2 low, must exceed W1 high and be the longest impulse
+    if current_wave == 2 and not na(w2_end_price)
+        _w3_price = f_last_f(ph_price)
+        _w3_bar   = f_last_i(ph_bar)
+        if not na(_w3_price) and _w3_bar > w2_end_bar and _w3_price > w1_end_price
+            _w1_len = w1_end_price - w1_start_price
+            _w3_len = _w3_price - w2_end_price
+            // Wave 3 must be the longest impulse (longer than Wave 1)
+            if _w3_len > _w1_len
+                w3_end_price := _w3_price
+                w3_end_bar   := _w3_bar
+                current_wave := 3
+
+    // Wave 4: retracement from W3 high; 23.6%–50% of W3, must not overlap W1 territory
+    if current_wave == 3 and not na(w3_end_price)
+        _w3_range  = w3_end_price - w2_end_price
+        _w4_price  = f_last_f(pl_price)
+        _w4_bar    = f_last_i(pl_bar)
+        if not na(_w4_price) and _w4_bar > w3_end_bar
+            _retrace = (w3_end_price - _w4_price) / _w3_range
+            if _retrace >= 0.236 and _retrace <= 0.50
+                // Elliott rule: Wave 4 must not overlap Wave 1 territory
+                if _w4_price > w1_end_price
+                    w4_end_price := _w4_price
+                    w4_end_bar   := _w4_bar
+                    wave4_valid  := math.abs(_retrace - fib_w4_retrace) <= 0.05
+                    current_wave := 4
+
+    // Wave 5: impulse from W4 low, projected equal to Wave 1 or 0.618× extension
+    if current_wave == 4 and not na(w4_end_price)
+        _w5_price = f_last_f(ph_price)
+        _w5_bar   = f_last_i(ph_bar)
+        if not na(_w5_price) and _w5_bar > w4_end_bar and _w5_price > w3_end_price
+            w5_end_price := _w5_price
+            w5_end_bar   := _w5_bar
+            current_wave := 5
+
+// ── Bearish Impulse Wave Detection (htf_trend == -1) ─────────────────────────
+
+if htf_trend == -1
+
+    // Wave 1 (down): move from recent pivot high to next pivot low
+    if current_wave == 0 and array.size(ph_price) >= 1 and array.size(pl_price) >= 1
+        _w0_price = f_last_f(ph_price)
+        _w0_bar   = f_last_i(ph_bar)
+        _w1_price = f_last_f(pl_price)
+        _w1_bar   = f_last_i(pl_bar)
+        if not na(_w0_price) and not na(_w1_price) and _w1_bar > _w0_bar and (_w0_price - _w1_price) >= min_move
+            w1_start_price := _w0_price
+            w1_start_bar   := _w0_bar
+            w1_end_price   := _w1_price
+            w1_end_bar     := _w1_bar
+            current_wave   := 1
+
+    // Wave 2 (up bounce): retracement between 50% and 78.6% of W1 decline
+    if current_wave == 1 and not na(w1_start_price)
+        _w1_range = w1_start_price - w1_end_price
+        _w2_price = f_last_f(ph_price)
+        _w2_bar   = f_last_i(ph_bar)
+        if not na(_w2_price) and _w2_bar > w1_end_bar
+            _retrace = (_w2_price - w1_end_price) / _w1_range
+            if _retrace >= 0.50 and _retrace <= 0.786
+                w2_end_price := _w2_price
+                w2_end_bar   := _w2_bar
+                wave2_valid  := math.abs(_retrace - fib_w2_retrace) <= 0.05
+                current_wave := 2
+
+    // Wave 3 (down): must exceed W1 low and be the longest decline
+    if current_wave == 2 and not na(w2_end_price)
+        _w3_price = f_last_f(pl_price)
+        _w3_bar   = f_last_i(pl_bar)
+        if not na(_w3_price) and _w3_bar > w2_end_bar and _w3_price < w1_end_price
+            _w1_len = w1_start_price - w1_end_price
+            _w3_len = w2_end_price - _w3_price
+            if _w3_len > _w1_len
+                w3_end_price := _w3_price
+                w3_end_bar   := _w3_bar
+                current_wave := 3
+
+    // Wave 4 (up bounce): 23.6%–50% of W3, must not overlap W1 territory
+    if current_wave == 3 and not na(w3_end_price)
+        _w3_range = w2_end_price - w3_end_price
+        _w4_price = f_last_f(ph_price)
+        _w4_bar   = f_last_i(ph_bar)
+        if not na(_w4_price) and _w4_bar > w3_end_bar
+            _retrace = (_w4_price - w3_end_price) / _w3_range
+            if _retrace >= 0.236 and _retrace <= 0.50
+                // Elliott rule: Wave 4 must not overlap W1 territory (price > W1 end for bearish)
+                if _w4_price < w1_end_price
+                    w4_end_price := _w4_price
+                    w4_end_bar   := _w4_bar
+                    wave4_valid  := math.abs(_retrace - fib_w4_retrace) <= 0.05
+                    current_wave := 4
+
+    // Wave 5 (down): new low below W3 low
+    if current_wave == 4 and not na(w4_end_price)
+        _w5_price = f_last_f(pl_price)
+        _w5_bar   = f_last_i(pl_bar)
+        if not na(_w5_price) and _w5_bar > w4_end_bar and _w5_price < w3_end_price
+            w5_end_price := _w5_price
+            w5_end_bar   := _w5_bar
+            current_wave := 5
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5: Fibonacci Level Overlays
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Persistent line handles for Fibonacci levels (deleted and redrawn on update)
+var line fib_w2_382  = na
+var line fib_w2_500  = na
+var line fib_w2_618  = na
+var line fib_w2_786  = na
+
+var line fib_w3_1272 = na
+var line fib_w3_1618 = na
+var line fib_w3_2000 = na
+var line fib_w3_2618 = na
+
+var line fib_w4_236  = na
+var line fib_w4_382  = na
+var line fib_w4_500  = na
+
+// Helper: delete a line if it exists
+f_del_line(ln) =>
+    if not na(ln)
+        line.delete(ln)
+
+// Draw Fibonacci lines when a Wave 1 is confirmed and we are on the last bar
+if show_fib_levels and not na(w1_start_price) and not na(w1_end_price) and barstate.islast
+
+    _w1_range = htf_trend == 1 ? (w1_end_price - w1_start_price) : (w1_start_price - w1_end_price)
+    _right    = bar_index + 50
+
+    // ── Wave 2 retracement zone ──────────────────────────────────────────────
+    _base  = w1_end_price  // W1 high (bull) or W1 low (bear)
+    _dir   = htf_trend == 1 ? -1.0 : 1.0   // bull: retrace down; bear: retrace up
+
+    f_del_line(fib_w2_382)
+    f_del_line(fib_w2_500)
+    f_del_line(fib_w2_618)
+    f_del_line(fib_w2_786)
+
+    fib_w2_382 := line.new(w1_end_bar, _base + _dir * _w1_range * 0.382, _right, _base + _dir * _w1_range * 0.382,
+         color=color.orange,  style=line.style_dashed, width=1,
+         tooltip="W2 Fib 0.382 | " + str.tostring(_base + _dir * _w1_range * 0.382, format.mintick))
+    fib_w2_500 := line.new(w1_end_bar, _base + _dir * _w1_range * 0.500, _right, _base + _dir * _w1_range * 0.500,
+         color=color.yellow,  style=line.style_dashed, width=1,
+         tooltip="W2 Fib 0.500 | " + str.tostring(_base + _dir * _w1_range * 0.500, format.mintick))
+    fib_w2_618 := line.new(w1_end_bar, _base + _dir * _w1_range * 0.618, _right, _base + _dir * _w1_range * 0.618,
+         color=color.lime,    style=line.style_dashed, width=1,
+         tooltip="W2 Fib 0.618 | " + str.tostring(_base + _dir * _w1_range * 0.618, format.mintick))
+    fib_w2_786 := line.new(w1_end_bar, _base + _dir * _w1_range * 0.786, _right, _base + _dir * _w1_range * 0.786,
+         color=color.red,     style=line.style_dashed, width=1,
+         tooltip="W2 Fib 0.786 | " + str.tostring(_base + _dir * _w1_range * 0.786, format.mintick))
+
+    // ── Wave 3 extension zone (from W2 base, only when W2 is confirmed) ──────
+    if not na(w2_end_price)
+        _w2_base = w2_end_price
+        _ext_dir = htf_trend == 1 ? 1.0 : -1.0
+
+        f_del_line(fib_w3_1272)
+        f_del_line(fib_w3_1618)
+        f_del_line(fib_w3_2000)
+        f_del_line(fib_w3_2618)
+
+        fib_w3_1272 := line.new(w2_end_bar, _w2_base + _ext_dir * _w1_range * 1.272, _right, _w2_base + _ext_dir * _w1_range * 1.272,
+             color=color.aqua,    style=line.style_dashed, width=1,
+             tooltip="W3 Fib 1.272 | " + str.tostring(_w2_base + _ext_dir * _w1_range * 1.272, format.mintick))
+        fib_w3_1618 := line.new(w2_end_bar, _w2_base + _ext_dir * _w1_range * 1.618, _right, _w2_base + _ext_dir * _w1_range * 1.618,
+             color=color.lime,    style=line.style_solid, width=2,
+             tooltip="W3 Fib 1.618 | " + str.tostring(_w2_base + _ext_dir * _w1_range * 1.618, format.mintick))
+        fib_w3_2000 := line.new(w2_end_bar, _w2_base + _ext_dir * _w1_range * 2.000, _right, _w2_base + _ext_dir * _w1_range * 2.000,
+             color=color.orange,  style=line.style_solid, width=2,
+             tooltip="W3 Fib 2.000 | " + str.tostring(_w2_base + _ext_dir * _w1_range * 2.000, format.mintick))
+        fib_w3_2618 := line.new(w2_end_bar, _w2_base + _ext_dir * _w1_range * 2.618, _right, _w2_base + _ext_dir * _w1_range * 2.618,
+             color=color.fuchsia, style=line.style_solid, width=2,
+             tooltip="W3 Fib 2.618 | " + str.tostring(_w2_base + _ext_dir * _w1_range * 2.618, format.mintick))
+
+    // ── Wave 4 retracement zone (from W3 high, only when W3 is confirmed) ────
+    if not na(w3_end_price)
+        _w3_base = w3_end_price
+        _w3_range = htf_trend == 1 ? (w3_end_price - w2_end_price) : (w2_end_price - w3_end_price)
+        _ret_dir  = htf_trend == 1 ? -1.0 : 1.0
+
+        f_del_line(fib_w4_236)
+        f_del_line(fib_w4_382)
+        f_del_line(fib_w4_500)
+
+        fib_w4_236 := line.new(w3_end_bar, _w3_base + _ret_dir * _w3_range * 0.236, _right, _w3_base + _ret_dir * _w3_range * 0.236,
+             color=color.orange, style=line.style_dashed, width=1,
+             tooltip="W4 Fib 0.236 | " + str.tostring(_w3_base + _ret_dir * _w3_range * 0.236, format.mintick))
+        fib_w4_382 := line.new(w3_end_bar, _w3_base + _ret_dir * _w3_range * 0.382, _right, _w3_base + _ret_dir * _w3_range * 0.382,
+             color=color.lime,   style=line.style_dashed, width=1,
+             tooltip="W4 Fib 0.382 | " + str.tostring(_w3_base + _ret_dir * _w3_range * 0.382, format.mintick))
+        fib_w4_500 := line.new(w3_end_bar, _w3_base + _ret_dir * _w3_range * 0.500, _right, _w3_base + _ret_dir * _w3_range * 0.500,
+             color=color.yellow, style=line.style_dashed, width=1,
+             tooltip="W4 Fib 0.500 | " + str.tostring(_w3_base + _ret_dir * _w3_range * 0.500, format.mintick))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6: Wave Structure Visual Lines & Labels
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Persistent handles for wave structure lines and labels
+var line  wl_01 = na
+var line  wl_12 = na
+var line  wl_23 = na
+var line  wl_34 = na
+var line  wl_45 = na
+
+var label lbl_w1 = na
+var label lbl_w2 = na
+var label lbl_w3 = na
+var label lbl_w4 = na
+var label lbl_w5 = na
+
+// Draw wave structure on the last bar when all pivots are available
+if show_wave_labels and barstate.islast
+
+    // Helper closures to delete and redraw lines between pivots
+    if not na(w1_start_price) and not na(w1_end_price)
+        if not na(wl_01) then line.delete(wl_01)
+        wl_01 := line.new(w1_start_bar, w1_start_price, w1_end_bar, w1_end_price,
+             color=color.green, width=2, style=line.style_solid)
+        if not na(lbl_w1) then label.delete(lbl_w1)
+        lbl_w1 := label.new(w1_end_bar, w1_end_price, "W1",
+             style=htf_trend==1 ? label.style_label_down : label.style_label_up,
+             color=color.green, textcolor=color.white, size=label.size_small)
+
+    if not na(w2_end_price)
+        if not na(wl_12) then line.delete(wl_12)
+        wl_12 := line.new(w1_end_bar, w1_end_price, w2_end_bar, w2_end_price,
+             color=color.red, width=2, style=line.style_solid)
+        if not na(lbl_w2) then label.delete(lbl_w2)
+        lbl_w2 := label.new(w2_end_bar, w2_end_price, "W2",
+             style=htf_trend==1 ? label.style_label_up : label.style_label_down,
+             color=color.red, textcolor=color.white, size=label.size_small)
+
+    if not na(w3_end_price)
+        if not na(wl_23) then line.delete(wl_23)
+        wl_23 := line.new(w2_end_bar, w2_end_price, w3_end_bar, w3_end_price,
+             color=color.green, width=3, style=line.style_solid)
+        if not na(lbl_w3) then label.delete(lbl_w3)
+        lbl_w3 := label.new(w3_end_bar, w3_end_price, "W3",
+             style=htf_trend==1 ? label.style_label_down : label.style_label_up,
+             color=color.green, textcolor=color.white, size=label.size_small)
+
+    if not na(w4_end_price)
+        if not na(wl_34) then line.delete(wl_34)
+        wl_34 := line.new(w3_end_bar, w3_end_price, w4_end_bar, w4_end_price,
+             color=color.red, width=2, style=line.style_solid)
+        if not na(lbl_w4) then label.delete(lbl_w4)
+        lbl_w4 := label.new(w4_end_bar, w4_end_price, "W4",
+             style=htf_trend==1 ? label.style_label_up : label.style_label_down,
+             color=color.red, textcolor=color.white, size=label.size_small)
+
+    if not na(w5_end_price)
+        if not na(wl_45) then line.delete(wl_45)
+        wl_45 := line.new(w4_end_bar, w4_end_price, w5_end_bar, w5_end_price,
+             color=color.green, width=2, style=line.style_solid)
+        if not na(lbl_w5) then label.delete(lbl_w5)
+        lbl_w5 := label.new(w5_end_bar, w5_end_price, "W5",
+             style=htf_trend==1 ? label.style_label_down : label.style_label_up,
+             color=color.green, textcolor=color.white, size=label.size_small)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7: Trade Signal Generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Compute signal conditions on every bar
+_w1_range_sig  = not na(w1_start_price) and not na(w1_end_price) ? math.abs(w1_end_price - w1_start_price) : float(na)
+
+// Bullish Wave 3 entry: price touches W2 fib zone, wave count = 2, HTF bullish
+w3_entry_signal = show_signals and current_wave == 2 and htf_trend == 1
+     and not na(_w1_range_sig)
+     and not na(w1_end_price)
+     and math.abs(close - (w1_end_price - _w1_range_sig * fib_w2_retrace)) <= _w1_range_sig * 0.01
+
+// Bullish Wave 5 entry: price touches W4 fib zone, wave count = 4, HTF bullish
+_w3_range_sig  = not na(w3_end_price) and not na(w2_end_price) ? math.abs(w3_end_price - w2_end_price) : float(na)
+w5_entry_signal = show_signals and current_wave == 4 and htf_trend == 1
+     and not na(_w3_range_sig)
+     and not na(w3_end_price)
+     and math.abs(close - (w3_end_price - _w3_range_sig * fib_w4_retrace)) <= _w3_range_sig * 0.01
+
+// Bearish Wave 3 short: mirror of bullish W3 entry
+w3_short_signal = show_signals and current_wave == 2 and htf_trend == -1
+     and not na(_w1_range_sig)
+     and not na(w1_end_price)
+     and math.abs(close - (w1_end_price + _w1_range_sig * fib_w2_retrace)) <= _w1_range_sig * 0.01
+
+// Bearish Wave 5 short: mirror of bullish W5 entry
+w5_short_signal = show_signals and current_wave == 4 and htf_trend == -1
+     and not na(_w3_range_sig)
+     and not na(w3_end_price)
+     and math.abs(close - (w3_end_price + _w3_range_sig * fib_w4_retrace)) <= _w3_range_sig * 0.01
+
+// Compute stop-loss levels
+sl_w3 = not na(w2_end_price) ? w2_end_price - atr_val * 0.5 : float(na)
+sl_w5 = not na(w4_end_price) ? w4_end_price - atr_val * 0.5 : float(na)
+
+// For bearish trades SL is above entry
+sl_w3_bear = not na(w2_end_price) ? w2_end_price + atr_val * 0.5 : float(na)
+sl_w5_bear = not na(w4_end_price) ? w4_end_price + atr_val * 0.5 : float(na)
+
+// Compute current SL for the dashboard
+sl_display = htf_trend == 1 ? (current_wave >= 4 ? sl_w5 : sl_w3) : (current_wave >= 4 ? sl_w5_bear : sl_w3_bear)
+
+// Plot bullish entry signals as triangles below bar
+plotshape(w3_entry_signal, title="W3 Bullish Entry", style=shape.triangleup,
+     location=location.belowbar, color=color.green, size=size.normal, text="W3 Entry ▲")
+plotshape(w5_entry_signal, title="W5 Bullish Entry", style=shape.triangleup,
+     location=location.belowbar, color=color.aqua,  size=size.normal, text="W5 Entry ▲")
+
+// Plot bearish entry signals as triangles above bar
+plotshape(w3_short_signal, title="W3 Bearish Entry", style=shape.triangledown,
+     location=location.abovebar, color=color.red,    size=size.normal, text="W3 Short ▼")
+plotshape(w5_short_signal, title="W5 Bearish Entry", style=shape.triangledown,
+     location=location.abovebar, color=color.orange, size=size.normal, text="W5 Short ▼")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 8: Risk Management – Stop-Loss Lines & R:R Labels
+// ─────────────────────────────────────────────────────────────────────────────
+
+var line  sl_line  = na
+var label sl_label = na
+
+if show_signals and barstate.islast and not na(sl_display)
+    // Remove previous SL drawings
+    if not na(sl_line)  then line.delete(sl_line)
+    if not na(sl_label) then label.delete(sl_label)
+
+    // Target price for R:R calculation (Wave 3 or Wave 5 Fibonacci extension)
+    _tp = not na(w2_end_price) ? w2_end_price + (htf_trend == 1 ? 1.0 : -1.0) * math.abs(w1_end_price - w1_start_price) * fib_w3_extend : float(na)
+    _risk    = not na(sl_display) ? math.abs(close - sl_display) : float(na)
+    _reward  = not na(_tp) ? math.abs(_tp - close) : float(na)
+    _rr      = not na(_risk) and _risk > 0 and not na(_reward) ? _reward / _risk : float(na)
+    _rr_str  = not na(_rr) ? "R:R ≈ " + str.tostring(math.round(_rr, 1)) : "R:R N/A"
+
+    sl_line := line.new(bar_index - 1, sl_display, bar_index + 30, sl_display,
+         color=color.red, style=line.style_dashed, width=2)
+    sl_label := label.new(bar_index + 30, sl_display,
+         "SL: " + str.tostring(sl_display, format.mintick),
+         style=label.style_label_left, color=color.red, textcolor=color.white,
+         size=label.size_small, tooltip=_rr_str)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 9: Table Dashboard (Info Panel)
+// ─────────────────────────────────────────────────────────────────────────────
+
+var table info_table = table.new(position.top_right, 2, 7,
+     bgcolor=color.new(color.black, 20), border_color=color.gray, border_width=1)
+
+if barstate.islast
+    // Helper: current wave label string
+    _wave_str = current_wave == 0 ? "None"
+         : current_wave == 1 ? "W1"
+         : current_wave == 2 ? "W2"
+         : current_wave == 3 ? "W3"
+         : current_wave == 4 ? "W4"
+         : "W5"
+
+    // W3 projected target
+    _w3_target = not na(w2_end_price) and not na(w1_start_price) and not na(w1_end_price)
+         ? w2_end_price + (htf_trend == 1 ? 1.0 : -1.0) * math.abs(w1_end_price - w1_start_price) * fib_w3_extend
+         : float(na)
+    _w3_tgt_str = not na(_w3_target) ? str.tostring(_w3_target, format.mintick) : "N/A"
+    _sl_str     = not na(sl_display) ? str.tostring(sl_display, format.mintick)  : "N/A"
+
+    // Row 0 – headers
+    table.cell(info_table, 0, 0, "Label",     text_color=color.gray,  bgcolor=color.new(color.black, 10))
+    table.cell(info_table, 1, 0, "Value",     text_color=color.gray,  bgcolor=color.new(color.black, 10))
+    // Row 1 – HTF Trend
+    table.cell(info_table, 0, 1, "HTF Trend", text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(info_table, 1, 1, htf_trend == 1 ? "Bullish" : "Bearish",
+         text_color=htf_trend == 1 ? color.teal : color.red, bgcolor=color.new(color.black, 30))
+    // Row 2 – Current Wave
+    table.cell(info_table, 0, 2, "Current Wave", text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(info_table, 1, 2, _wave_str,       text_color=color.yellow, bgcolor=color.new(color.black, 30))
+    // Row 3 – W2 Valid
+    table.cell(info_table, 0, 3, "W2 Valid",      text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(info_table, 1, 3, wave2_valid ? "✓" : "✗",
+         text_color=wave2_valid ? color.lime : color.red, bgcolor=color.new(color.black, 30))
+    // Row 4 – W4 Valid
+    table.cell(info_table, 0, 4, "W4 Valid",      text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(info_table, 1, 4, wave4_valid ? "✓" : "✗",
+         text_color=wave4_valid ? color.lime : color.red, bgcolor=color.new(color.black, 30))
+    // Row 5 – W3 Target
+    table.cell(info_table, 0, 5, "W3 Target",   text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(info_table, 1, 5, _w3_tgt_str,   text_color=color.aqua,  bgcolor=color.new(color.black, 30))
+    // Row 6 – SL Level
+    table.cell(info_table, 0, 6, "SL Level",    text_color=color.white, bgcolor=color.new(color.black, 30))
+    table.cell(info_table, 1, 6, _sl_str,        text_color=color.red,   bgcolor=color.new(color.black, 30))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 10: Alert Conditions
+// ─────────────────────────────────────────────────────────────────────────────
+
+alertcondition(w3_entry_signal, title="EW Wave 3 Entry", message="Elliott Wave 3 Entry Signal detected")
+alertcondition(w5_entry_signal, title="EW Wave 5 Entry", message="Elliott Wave 5 Entry Signal detected")
+alertcondition(w3_short_signal, title="EW Wave 3 Short", message="Elliott Wave 3 Short Signal detected")
+alertcondition(w5_short_signal, title="EW Wave 5 Short", message="Elliott Wave 5 Short Signal detected")
