@@ -1,67 +1,122 @@
 // This Pine Script(TM) source code is subject to the terms of the Mozilla Public License 2.0
 // https://mozilla.org/MPL/2.0/
-// (c) Elliott Wave + Fibonacci Professional Indicator
+// (c) Elliott Wave + Fibonacci Professional Indicator v2.0
 
 //@version=5
-indicator("Elliott Wave + Fibonacci Pro", shorttitle="EW-Fib Pro", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+indicator("Elliott Wave + Fibonacci Pro v2", shorttitle="EW-Fib Pro", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=100)
+
+// ============================================================================
+// CONSTANTS - Named Fibonacci ratios and system thresholds
+// ============================================================================
+
+FIB_236  = 0.236   // Minor retracement
+FIB_382  = 0.382   // Wave 4 retracement ideal
+FIB_500  = 0.500   // 50% retracement
+FIB_618  = 0.618   // Golden ratio (Wave 2 ideal)
+FIB_786  = 0.786   // Wave 2 maximum
+FIB_1000 = 1.000   // Full wave equality
+FIB_1272 = 1.272   // Square root of 1.618
+FIB_1618 = 1.618   // Golden ratio extension
+FIB_2000 = 2.000   // Double extension
+FIB_2618 = 2.618   // Golden ratio squared
+FIB_4236 = 4.236   // Rare strong extension
+MAX_PIVOTS = 50    // Maximum pivots stored in detection buffer
 
 // ============================================================================
 // USER INPUTS
 // ============================================================================
 
 // --- Trend Detection ---
-grp_trend     = "Primary Trend Detection"
-htfEnabled    = input.bool(true, "Enable Higher-Timeframe Trend Filter", group=grp_trend)
-htfTimeframe  = input.timeframe("D", "Higher Timeframe", group=grp_trend,
+grp_trend    = "Primary Trend Detection"
+htfEnabled   = input.bool(true,  "Enable Higher-Timeframe Trend Filter", group=grp_trend)
+htfTimeframe = input.timeframe("D", "Higher Timeframe", group=grp_trend,
      tooltip="Select the higher timeframe used for primary trend detection.")
-trendMaLen    = input.int(50, "Trend MA Length", minval=5, maxval=200, group=grp_trend)
-trendMaType   = input.string("EMA", "Trend MA Type", options=["EMA", "SMA", "WMA", "HMA"], group=grp_trend)
+trendMaLen   = input.int(50,    "Trend MA Length", minval=5,  maxval=200,  group=grp_trend)
+trendMaType  = input.string("EMA","Trend MA Type", options=["EMA","SMA","WMA","HMA"], group=grp_trend)
 
 // --- Wave Detection ---
-grp_wave      = "Elliott Wave Detection"
-zigzagLen     = input.int(10, "Zigzag Pivot Length", minval=3, maxval=50, group=grp_wave,
-     tooltip="Number of bars left/right used to detect swing highs and lows. Lower = more sensitive.")
-minWaveBars   = input.int(5, "Min Bars Between Pivots", minval=2, maxval=50, group=grp_wave)
-waveMode      = input.string("Auto", "Wave Direction Mode", options=["Auto", "Bullish", "Bearish"], group=grp_wave,
+grp_wave     = "Elliott Wave Detection"
+zigzagLen    = input.int(10, "Zigzag Pivot Length", minval=3, maxval=50, group=grp_wave,
+     tooltip="Bars left/right to identify swing highs and lows. Lower = more sensitive.")
+minWaveBars  = input.int(5,  "Min Bars Between Pivots", minval=2, maxval=50, group=grp_wave)
+waveMode     = input.string("Auto","Wave Direction Mode", options=["Auto","Bullish","Bearish"], group=grp_wave,
      tooltip="Auto detects direction from the higher-timeframe trend.")
 
-// --- Fibonacci Settings ---
-grp_fib       = "Fibonacci Levels"
-showFibLines  = input.bool(true, "Show Fibonacci Lines", group=grp_fib)
-showFibLabels = input.bool(true, "Show Fibonacci Labels", group=grp_fib)
-fibLineWidth  = input.int(1, "Line Width", minval=1, maxval=4, group=grp_fib)
-w2RetLow      = input.float(0.500, "Wave 2 Ret. Min (50%)", minval=0.2, maxval=0.9, step=0.01, group=grp_fib)
-w2RetHigh     = input.float(0.786, "Wave 2 Ret. Max (78.6%)", minval=0.3, maxval=0.95, step=0.01, group=grp_fib)
-w2RetIdeal    = input.float(0.618, "Wave 2 Ret. Ideal (61.8%)", minval=0.3, maxval=0.9, step=0.01, group=grp_fib)
-w3ExtMin      = input.float(1.618, "Wave 3 Ext. Minimum (161.8%)", minval=1.0, maxval=4.0, step=0.01, group=grp_fib)
-w4RetLow      = input.float(0.236, "Wave 4 Ret. Min (23.6%)", minval=0.1, maxval=0.6, step=0.01, group=grp_fib)
-w4RetHigh     = input.float(0.500, "Wave 4 Ret. Max (50%)", minval=0.2, maxval=0.7, step=0.01, group=grp_fib)
-w4RetIdeal    = input.float(0.382, "Wave 4 Ret. Ideal (38.2%)", minval=0.15, maxval=0.6, step=0.01, group=grp_fib)
-w5ExtMin      = input.float(0.618, "Wave 5 Ext. Min of W1 (61.8%)", minval=0.3, maxval=2.0, step=0.01, group=grp_fib)
-w5ExtMax      = input.float(1.618, "Wave 5 Ext. Max of W1 (161.8%)", minval=0.5, maxval=3.0, step=0.01, group=grp_fib)
+// --- Fibonacci Levels ---
+grp_fib      = "Fibonacci Levels"
+showFibLines  = input.bool(true,  "Show Fibonacci Lines",   group=grp_fib)
+showFibLabels = input.bool(true,  "Show Fibonacci Labels",  group=grp_fib)
+fibLineWidth  = input.int(1,      "Line Width", minval=1, maxval=4, group=grp_fib)
+w2RetLow     = input.float(0.500, "Wave 2 Ret. Min (50%)",    minval=0.2,  maxval=0.9,  step=0.01, group=grp_fib)
+w2RetHigh    = input.float(0.786, "Wave 2 Ret. Max (78.6%)",  minval=0.3,  maxval=0.95, step=0.01, group=grp_fib)
+w2RetIdeal   = input.float(0.618, "Wave 2 Ret. Ideal (61.8%)",minval=0.3,  maxval=0.9,  step=0.01, group=grp_fib)
+w3ExtMin     = input.float(1.618, "Wave 3 Ext. Minimum (161.8%)",minval=1.0,maxval=4.0, step=0.01, group=grp_fib)
+w4RetLow     = input.float(0.236, "Wave 4 Ret. Min (23.6%)",  minval=0.1,  maxval=0.6,  step=0.01, group=grp_fib)
+w4RetHigh    = input.float(0.500, "Wave 4 Ret. Max (50%)",    minval=0.2,  maxval=0.7,  step=0.01, group=grp_fib)
+w4RetIdeal   = input.float(0.382, "Wave 4 Ret. Ideal (38.2%)",minval=0.15, maxval=0.6,  step=0.01, group=grp_fib)
+w5ExtMin     = input.float(0.618, "Wave 5 Ext. Min of W1 (61.8%)", minval=0.3,maxval=2.0,step=0.01,group=grp_fib)
+w5ExtMax     = input.float(1.618, "Wave 5 Ext. Max of W1 (161.8%)",minval=0.5,maxval=3.0,step=0.01,group=grp_fib)
 
-// --- Signal & Risk ---
-grp_signal    = "Signals & Risk Management"
-showSignals   = input.bool(true, "Show Trade Signals", group=grp_signal)
-slBuffer      = input.float(0.5, "Stop-Loss Buffer (%)", minval=0.0, maxval=5.0, step=0.1, group=grp_signal,
-     tooltip="Additional buffer beyond wave boundary for stop-loss placement, as a percentage of price.")
-showSLLines   = input.bool(true, "Show Stop-Loss Lines", group=grp_signal)
-showTPLines   = input.bool(true, "Show Take-Profit Lines", group=grp_signal)
+// --- Signals & Risk Management ---
+grp_signal   = "Signals & Risk Management"
+showSignals  = input.bool(true,  "Show Trade Signals",    group=grp_signal)
+slBuffer     = input.float(0.5,  "Stop-Loss Buffer (%)", minval=0.0, maxval=5.0, step=0.1, group=grp_signal,
+     tooltip="Additional % buffer beyond wave boundary for stop-loss placement.")
+showSLLines  = input.bool(true,  "Show Stop-Loss Lines",  group=grp_signal)
+showTPLines  = input.bool(true,  "Show Take-Profit Lines",group=grp_signal)
 
-// --- Visual ---
-grp_vis       = "Visual Settings"
-bullColor     = input.color(color.new(#089981, 0), "Bullish Wave Color", group=grp_vis)
-bearColor     = input.color(color.new(#F23645, 0), "Bearish Wave Color", group=grp_vis)
-fibColor      = input.color(color.new(#FF9800, 0), "Fibonacci Level Color", group=grp_vis)
-slColor       = input.color(color.new(#FF0000, 0), "Stop-Loss Color", group=grp_vis)
-tpColor       = input.color(color.new(#00E676, 0), "Take-Profit Color", group=grp_vis)
-labelSize     = input.string("small", "Label Size", options=["tiny", "small", "normal", "large"], group=grp_vis)
+// --- Visual Settings ---
+grp_vis      = "Visual Settings"
+bullColor    = input.color(color.new(#089981,0), "Bullish Wave Color",    group=grp_vis)
+bearColor    = input.color(color.new(#F23645,0), "Bearish Wave Color",    group=grp_vis)
+fibColor     = input.color(color.new(#FF9800,0), "Fibonacci Level Color", group=grp_vis)
+slColor      = input.color(color.new(#FF0000,0), "Stop-Loss Color",       group=grp_vis)
+tpColor      = input.color(color.new(#00E676,0), "Take-Profit Color",     group=grp_vis)
+labelSize    = input.string("small","Label Size", options=["tiny","small","normal","large"], group=grp_vis)
+
+// --- Corrective Wave Detection ---
+grp_corr     = "Corrective Wave Detection"
+enableCorrectionDetection = input.bool(true, "Enable ABC Correction Detection", group=grp_corr,
+     tooltip="Detect and label ABC corrective patterns: zigzags and flats.")
+correctionTolerance = input.float(0.10, "Pattern Tolerance (10%)", minval=0.05, maxval=0.25, step=0.01, group=grp_corr,
+     tooltip="Allowable variance from ideal Fibonacci ratios for correction classification.")
+showCorrectionLabels = input.bool(true, "(A)(B)(C) Labels", group=grp_corr)
+corrColor    = input.color(color.new(#9C27B0,0), "Correction Wave Color", group=grp_corr)
+
+// --- Sub-Wave Analysis ---
+grp_subwave  = "Sub-Wave Analysis"
+enableSubWaveLabeling = input.bool(false, "Enable Sub-Wave Labeling", group=grp_subwave,
+     tooltip="Show intermediate sub-wave labels within primary waves (1a, 1b, 1c...).")
+subZigzagLen = input.int(5, "Sub-Wave Pivot Length", minval=2, maxval=20, group=grp_subwave,
+     tooltip="Smaller pivot length for detecting sub-wave structure inside primary waves.")
+subWaveLabelSize = input.string("tiny","Sub-Wave Label Size", options=["tiny","small"], group=grp_subwave)
+
+// --- Validation Settings ---
+grp_valid    = "Validation Settings"
+strictMode   = input.bool(false, "Enable Strict Mode", group=grp_valid,
+     tooltip="Enforce all 8 Elliott Wave rules. Reduces false signals but may also filter valid ones.")
+showComplianceScore = input.bool(true, "Show Compliance Score", group=grp_valid)
+ruleViolationAlert  = input.bool(true, "Alert on Rule Violations", group=grp_valid)
+minComplianceScore  = input.float(60.0,"Minimum Compliance Score (%)", minval=0.0, maxval=100.0, step=5.0, group=grp_valid,
+     tooltip="Minimum compliance % required to display a pattern when Strict Mode is enabled.")
+
+// --- Advanced Fibonacci ---
+grp_fibadv   = "Advanced Fibonacci"
+showExtendedRatios  = input.bool(true, "Show Extended Fibonacci Ratios", group=grp_fibadv,
+     tooltip="Add levels at 127.2%, 200%, 261.8%, and 423.6%.")
+showConfluenceZones = input.bool(true, "Show Confluence Zones", group=grp_fibadv,
+     tooltip="Highlight zones where multiple Fibonacci projections cluster together.")
+confluenceTolerance = input.float(0.005,"Confluence Zone Width", minval=0.001, maxval=0.02, step=0.001, group=grp_fibadv,
+     tooltip="Proximity threshold (as decimal fraction) for two levels to form a confluence zone.")
+projectionLookahead = input.int(30, "Projection Bars Forward", minval=10, maxval=100, group=grp_fibadv)
+showWaveRatios      = input.bool(true, "Show Wave Ratios in Dashboard", group=grp_fibadv,
+     tooltip="Display W3/W1, W5/W1, and W4/W3 ratios in the info panel.")
 
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
 
-// Convert label size string to size constant
+// @function Convert label size string to Pine Script size constant
 getLabelSize(s) =>
     switch s
         "tiny"   => size.tiny
@@ -70,7 +125,7 @@ getLabelSize(s) =>
         "large"  => size.large
         => size.small
 
-// Moving average selector
+// @function Calculate moving average with selectable type
 calcMA(src, len, maType) =>
     switch maType
         "EMA" => ta.ema(src, len)
@@ -87,48 +142,41 @@ htfClose   = request.security(syminfo.tickerid, htfTimeframe, close)
 htfMA      = request.security(syminfo.tickerid, htfTimeframe, calcMA(close, trendMaLen, trendMaType))
 htfTrendUp = htfClose > htfMA
 
-// Determine effective wave direction
 isBullish = switch waveMode
     "Auto"    => htfEnabled ? htfTrendUp : close > calcMA(close, trendMaLen, trendMaType)
     "Bullish" => true
     "Bearish" => false
     => true
 
-// Trend background
-trendBgColor = htfEnabled ? (htfTrendUp ? color.new(bullColor, 95) : color.new(bearColor, 95)) : na
+trendBgColor = htfEnabled ? (htfTrendUp ? color.new(bullColor,95) : color.new(bearColor,95)) : na
 bgcolor(trendBgColor, title="Trend Background")
 
 // ============================================================================
 // ZIGZAG PIVOT DETECTION
 // ============================================================================
 
-// Detect pivot highs and lows
 pivotHigh = ta.pivothigh(high, zigzagLen, zigzagLen)
-pivotLow  = ta.pivotlow(low, zigzagLen, zigzagLen)
+pivotLow  = ta.pivotlow(low,  zigzagLen, zigzagLen)
 
-// Track pivots with arrays for flexibility
 var float[] pivotPrices = array.new_float(0)
 var int[]   pivotBars   = array.new_int(0)
 var int[]   pivotTypes  = array.new_int(0)  // 1 = high, -1 = low
 
-maxPivots = 50
-
 // Add new pivot high
 if not na(pivotHigh)
     pivotBar = bar_index - zigzagLen
-    canAdd = array.size(pivotBars) == 0 ? true : (pivotBar - array.get(pivotBars, array.size(pivotBars) - 1)) >= minWaveBars
+    canAdd   = array.size(pivotBars) == 0 ? true : (pivotBar - array.get(pivotBars, array.size(pivotBars)-1)) >= minWaveBars
     if canAdd
-        // Avoid consecutive same-type pivots - keep the more extreme one
-        lastIsHigh = array.size(pivotTypes) > 0 ? array.get(pivotTypes, array.size(pivotTypes) - 1) == 1 : false
+        lastIsHigh = array.size(pivotTypes) > 0 ? array.get(pivotTypes, array.size(pivotTypes)-1) == 1 : false
         if lastIsHigh
-            if pivotHigh > array.get(pivotPrices, array.size(pivotPrices) - 1)
-                array.set(pivotPrices, array.size(pivotPrices) - 1, pivotHigh)
-                array.set(pivotBars,   array.size(pivotBars) - 1,   pivotBar)
+            if pivotHigh > array.get(pivotPrices, array.size(pivotPrices)-1)
+                array.set(pivotPrices, array.size(pivotPrices)-1, pivotHigh)
+                array.set(pivotBars,   array.size(pivotBars)-1,   pivotBar)
         else
             array.push(pivotPrices, pivotHigh)
             array.push(pivotBars,   pivotBar)
             array.push(pivotTypes,  1)
-            if array.size(pivotPrices) > maxPivots
+            if array.size(pivotPrices) > MAX_PIVOTS
                 array.shift(pivotPrices)
                 array.shift(pivotBars)
                 array.shift(pivotTypes)
@@ -136,34 +184,99 @@ if not na(pivotHigh)
 // Add new pivot low
 if not na(pivotLow)
     pivotBar = bar_index - zigzagLen
-    canAdd = array.size(pivotBars) == 0 ? true : (pivotBar - array.get(pivotBars, array.size(pivotBars) - 1)) >= minWaveBars
+    canAdd   = array.size(pivotBars) == 0 ? true : (pivotBar - array.get(pivotBars, array.size(pivotBars)-1)) >= minWaveBars
     if canAdd
-        lastIsLow = array.size(pivotTypes) > 0 ? array.get(pivotTypes, array.size(pivotTypes) - 1) == -1 : false
+        lastIsLow = array.size(pivotTypes) > 0 ? array.get(pivotTypes, array.size(pivotTypes)-1) == -1 : false
         if lastIsLow
-            if pivotLow < array.get(pivotPrices, array.size(pivotPrices) - 1)
-                array.set(pivotPrices, array.size(pivotPrices) - 1, pivotLow)
-                array.set(pivotBars,   array.size(pivotBars) - 1,   pivotBar)
+            if pivotLow < array.get(pivotPrices, array.size(pivotPrices)-1)
+                array.set(pivotPrices, array.size(pivotPrices)-1, pivotLow)
+                array.set(pivotBars,   array.size(pivotBars)-1,   pivotBar)
         else
             array.push(pivotPrices, pivotLow)
             array.push(pivotBars,   pivotBar)
-            array.push(pivotTypes, -1)
-            if array.size(pivotPrices) > maxPivots
+            array.push(pivotTypes,  -1)
+            if array.size(pivotPrices) > MAX_PIVOTS
                 array.shift(pivotPrices)
                 array.shift(pivotBars)
                 array.shift(pivotTypes)
 
 // ============================================================================
+// STRICT ELLIOTT WAVE RULE VALIDATION
+// ============================================================================
+
+// @function Validate 8 core Elliott Wave rules and return a compliance score.
+// @param bull  true = bullish impulse, false = bearish impulse
+// @param p0    Wave origin price
+// @param p1-p5 Wave 1-5 endpoint prices
+// @returns     [complianceScore (0-100), violationCount (0-8)]
+validateElliotRules(bull, p0, p1, p2, p3, p4, p5) =>
+    violations = 0
+    totalRules = 8
+    if bull
+        w1Len = p1 - p0
+        w3Len = p3 - p2
+        w5Len = p5 - p4
+        // R1: Wave 2 never retraces beyond Wave 1 start
+        if p2 <= p0
+            violations += 1
+        // R2: Wave 3 must advance beyond Wave 1 high
+        if p3 <= p1
+            violations += 1
+        // R3: Wave 3 is never the shortest impulse wave
+        if not (w3Len >= w1Len and w3Len >= w5Len)
+            violations += 1
+        // R4: Wave 4 never overlaps into Wave 1 territory
+        if p4 <= p1
+            violations += 1
+        // R5: Wave 5 advances beyond Wave 3 (allow up to 1% truncation)
+        if p5 < p3 * 0.99
+            violations += 1
+        // R6: Wave 2 retracement within accepted Fibonacci range
+        w2Ret = w1Len > 0 ? (p1 - p2) / w1Len : 0.0
+        if not (w2Ret >= w2RetLow and w2Ret <= w2RetHigh)
+            violations += 1
+        // R7: Wave 4 retracement within accepted Fibonacci range
+        w4Ret = w3Len > 0 ? (p3 - p4) / w3Len : 0.0
+        if not (w4Ret >= w4RetLow and w4Ret <= w4RetHigh)
+            violations += 1
+        // R8: Wave 3 extension meets minimum threshold
+        w3Ext = w1Len > 0 ? w3Len / w1Len : 0.0
+        if w3Ext < w3ExtMin
+            violations += 1
+    else
+        w1Len = p0 - p1
+        w3Len = p2 - p3
+        w5Len = p4 - p5
+        if p2 >= p0
+            violations += 1
+        if p3 >= p1
+            violations += 1
+        if not (w3Len >= w1Len and w3Len >= w5Len)
+            violations += 1
+        if p4 >= p1
+            violations += 1
+        if p5 > p3 * 1.01
+            violations += 1
+        w2Ret = w1Len > 0 ? (p2 - p1) / w1Len : 0.0
+        if not (w2Ret >= w2RetLow and w2Ret <= w2RetHigh)
+            violations += 1
+        w4Ret = w3Len > 0 ? (p4 - p3) / w3Len : 0.0
+        if not (w4Ret >= w4RetLow and w4Ret <= w4RetHigh)
+            violations += 1
+        w3Ext = w1Len > 0 ? w3Len / w1Len : 0.0
+        if w3Ext < w3ExtMin
+            violations += 1
+    complianceScore = math.round((totalRules - violations) * 100 / totalRules)
+    [complianceScore, violations]
+
+// ============================================================================
 // ELLIOTT WAVE PATTERN RECOGNITION
 // ============================================================================
 
-// We need at least 6 alternating pivots to form a 5-wave structure:
-// Bullish: Low(0) High(W1) Low(W2) High(W3) Low(W4) High(W5)
-// Bearish: High(0) Low(W1) High(W2) Low(W3) High(W4) Low(W5)
-
-var int   detectedWave   = 0       // Current wave number (0 = none, 1-5)
-var bool  patternBull    = true    // Direction of detected pattern
-var float w0Price        = na      // Origin price
-var int   w0Bar          = na      // Origin bar
+var int   detectedWave   = 0
+var bool  patternBull    = true
+var float w0Price        = na
+var int   w0Bar          = na
 var float w1Price        = na
 var int   w1Bar          = na
 var float w2Price        = na
@@ -175,7 +288,6 @@ var int   w4Bar          = na
 var float w5Price        = na
 var int   w5Bar          = na
 
-// Fibonacci validation results
 var bool  w2FibValid     = false
 var bool  w3FibValid     = false
 var bool  w4FibValid     = false
@@ -184,132 +296,75 @@ var float w2Retracement  = na
 var float w3Extension    = na
 var float w4Retracement  = na
 
-// Signal state
 var int   lastSignalBar  = 0
 var float entryPrice     = na
 var float stopLoss       = na
 var float takeProfit     = na
 
-// Pattern scan function - looks at the most recent pivots
+// Compliance tracking for last detected pattern
+var int   complianceScore = 0
+var int   violationCount  = 0
+
+// @function Scan pivot array for a complete 5-wave impulse pattern
 scanWavePattern() =>
     n = array.size(pivotPrices)
-    foundWave    = 0
-    foundBull    = true
-    fp0 = 0.0
-    fp1 = 0.0
-    fp2 = 0.0
-    fp3 = 0.0
-    fp4 = 0.0
-    fp5 = 0.0
-    fb0 = 0
-    fb1 = 0
-    fb2 = 0
-    fb3 = 0
-    fb4 = 0
-    fb5 = 0
-    fW2Ret     = 0.0
-    fW3Ext     = 0.0
-    fW4Ret     = 0.0
-    fW2Valid   = false
-    fW3Valid   = false
-    fW4Valid   = false
-    fW5Valid   = false
+    foundWave = 0
+    foundBull = true
+    fp0 = 0.0; fp1 = 0.0; fp2 = 0.0; fp3 = 0.0; fp4 = 0.0; fp5 = 0.0
+    fb0 = 0;   fb1 = 0;   fb2 = 0;   fb3 = 0;   fb4 = 0;   fb5 = 0
+    fW2Ret = 0.0; fW3Ext = 0.0; fW4Ret = 0.0
+    fW2Valid = false; fW3Valid = false; fW4Valid = false; fW5Valid = false
 
     if n >= 6
-        // Check last 6 pivots for a complete or partial 5-wave structure
-        // Try bullish pattern first (start from a low)
         for startIdx = math.max(0, n - 12) to n - 6
             if foundWave >= 4
                 break
-            
             pType0 = array.get(pivotTypes, startIdx)
-            
+
             // --- BULLISH 5-WAVE ---
             if pType0 == -1 and isBullish
-                p0 = array.get(pivotPrices, startIdx)
-                b0 = array.get(pivotBars,   startIdx)
-                p1 = array.get(pivotPrices, startIdx + 1)
-                b1 = array.get(pivotBars,   startIdx + 1)
-                p2 = array.get(pivotPrices, startIdx + 2)
-                b2 = array.get(pivotBars,   startIdx + 2)
-                p3 = array.get(pivotPrices, startIdx + 3)
-                b3 = array.get(pivotBars,   startIdx + 3)
-                p4 = array.get(pivotPrices, startIdx + 4)
-                b4 = array.get(pivotBars,   startIdx + 4)
-                p5 = array.get(pivotPrices, startIdx + 5)
-                b5 = array.get(pivotBars,   startIdx + 5)
+                p0 = array.get(pivotPrices, startIdx);     b0 = array.get(pivotBars, startIdx)
+                p1 = array.get(pivotPrices, startIdx + 1); b1 = array.get(pivotBars, startIdx + 1)
+                p2 = array.get(pivotPrices, startIdx + 2); b2 = array.get(pivotBars, startIdx + 2)
+                p3 = array.get(pivotPrices, startIdx + 3); b3 = array.get(pivotBars, startIdx + 3)
+                p4 = array.get(pivotPrices, startIdx + 4); b4 = array.get(pivotBars, startIdx + 4)
+                p5 = array.get(pivotPrices, startIdx + 5); b5 = array.get(pivotBars, startIdx + 5)
 
-                // Basic Elliott rules for bullish impulse:
-                // 1. Wave 2 doesn't retrace beyond Wave 1 start: p2 > p0
-                // 2. Wave 3 is not the shortest: (p3 - p2) >= (p1 - p0) or (p3 - p2) >= (p5 - p4)
-                // 3. Wave 4 doesn't enter Wave 1 territory: p4 > p1
-                // 4. Progressive highs: p3 > p1, p5 > p3 (typical but p5 can truncate)
                 rule1 = p2 > p0
-                rule2 = p1 > p0 and p3 > p2  // Waves move in right direction
-                w1Len = p1 - p0
-                w3Len = p3 - p2
-                w5Len = p5 - p4
-                rule3 = w3Len >= w1Len or w3Len >= w5Len   // Wave 3 not shortest
-                rule4 = p4 > p1                              // Wave 4 above Wave 1 top
-                rule5 = p3 > p1                              // Wave 3 higher than Wave 1
+                rule2 = p1 > p0 and p3 > p2
+                w1Len = p1 - p0; w3Len = p3 - p2; w5Len = p5 - p4
+                rule3 = w3Len >= w1Len or w3Len >= w5Len
+                rule4 = p4 > p1
+                rule5 = p3 > p1
 
                 if rule1 and rule2 and rule3 and rule4 and rule5
-                    // Fibonacci validation
                     retW2 = w1Len != 0 ? (p1 - p2) / w1Len : 0.0
                     extW3 = w1Len != 0 ? w3Len / w1Len : 0.0
                     retW4 = w3Len != 0 ? (p3 - p4) / w3Len : 0.0
-
                     vW2 = retW2 >= w2RetLow and retW2 <= w2RetHigh
                     vW3 = extW3 >= w3ExtMin
                     vW4 = retW4 >= w4RetLow and retW4 <= w4RetHigh
                     vW5 = w5Len >= w1Len * w5ExtMin and w5Len <= w1Len * w5ExtMax
-
-                    // Require at least W2 + one other Fibonacci condition
-                    fibScore = (vW2 ? 1 : 0) + (vW3 ? 1 : 0) + (vW4 ? 1 : 0) + (vW5 ? 1 : 0)
+                    fibScore = (vW2?1:0) + (vW3?1:0) + (vW4?1:0) + (vW5?1:0)
                     if vW2 and fibScore >= 2
-                        foundWave  := 5
-                        foundBull  := true
-                        fp0 := p0
-                        fp1 := p1
-                        fp2 := p2
-                        fp3 := p3
-                        fp4 := p4
-                        fp5 := p5
-                        fb0 := b0
-                        fb1 := b1
-                        fb2 := b2
-                        fb3 := b3
-                        fb4 := b4
-                        fb5 := b5
-                        fW2Ret   := retW2
-                        fW3Ext   := extW3
-                        fW4Ret   := retW4
-                        fW2Valid := vW2
-                        fW3Valid := vW3
-                        fW4Valid := vW4
-                        fW5Valid := vW5
+                        foundWave := 5; foundBull := true
+                        fp0:=p0; fp1:=p1; fp2:=p2; fp3:=p3; fp4:=p4; fp5:=p5
+                        fb0:=b0; fb1:=b1; fb2:=b2; fb3:=b3; fb4:=b4; fb5:=b5
+                        fW2Ret:=retW2; fW3Ext:=extW3; fW4Ret:=retW4
+                        fW2Valid:=vW2; fW3Valid:=vW3; fW4Valid:=vW4; fW5Valid:=vW5
 
             // --- BEARISH 5-WAVE ---
             if pType0 == 1 and not isBullish
-                p0 = array.get(pivotPrices, startIdx)
-                b0 = array.get(pivotBars,   startIdx)
-                p1 = array.get(pivotPrices, startIdx + 1)
-                b1 = array.get(pivotBars,   startIdx + 1)
-                p2 = array.get(pivotPrices, startIdx + 2)
-                b2 = array.get(pivotBars,   startIdx + 2)
-                p3 = array.get(pivotPrices, startIdx + 3)
-                b3 = array.get(pivotBars,   startIdx + 3)
-                p4 = array.get(pivotPrices, startIdx + 4)
-                b4 = array.get(pivotBars,   startIdx + 4)
-                p5 = array.get(pivotPrices, startIdx + 5)
-                b5 = array.get(pivotBars,   startIdx + 5)
+                p0 = array.get(pivotPrices, startIdx);     b0 = array.get(pivotBars, startIdx)
+                p1 = array.get(pivotPrices, startIdx + 1); b1 = array.get(pivotBars, startIdx + 1)
+                p2 = array.get(pivotPrices, startIdx + 2); b2 = array.get(pivotBars, startIdx + 2)
+                p3 = array.get(pivotPrices, startIdx + 3); b3 = array.get(pivotBars, startIdx + 3)
+                p4 = array.get(pivotPrices, startIdx + 4); b4 = array.get(pivotBars, startIdx + 4)
+                p5 = array.get(pivotPrices, startIdx + 5); b5 = array.get(pivotBars, startIdx + 5)
 
-                // Bearish Elliott rules (mirrored):
                 rule1 = p2 < p0
                 rule2 = p1 < p0 and p3 < p2
-                w1Len = p0 - p1
-                w3Len = p2 - p3
-                w5Len = p4 - p5
+                w1Len = p0 - p1; w3Len = p2 - p3; w5Len = p4 - p5
                 rule3 = w3Len >= w1Len or w3Len >= w5Len
                 rule4 = p4 < p1
                 rule5 = p3 < p1
@@ -318,78 +373,42 @@ scanWavePattern() =>
                     retW2 = w1Len != 0 ? (p2 - p1) / w1Len : 0.0
                     extW3 = w1Len != 0 ? w3Len / w1Len : 0.0
                     retW4 = w3Len != 0 ? (p4 - p3) / w3Len : 0.0
-
                     vW2 = retW2 >= w2RetLow and retW2 <= w2RetHigh
                     vW3 = extW3 >= w3ExtMin
                     vW4 = retW4 >= w4RetLow and retW4 <= w4RetHigh
                     vW5 = w5Len >= w1Len * w5ExtMin and w5Len <= w1Len * w5ExtMax
-
-                    fibScore = (vW2 ? 1 : 0) + (vW3 ? 1 : 0) + (vW4 ? 1 : 0) + (vW5 ? 1 : 0)
+                    fibScore = (vW2?1:0) + (vW3?1:0) + (vW4?1:0) + (vW5?1:0)
                     if vW2 and fibScore >= 2
-                        foundWave  := 5
-                        foundBull  := false
-                        fp0 := p0
-                        fp1 := p1
-                        fp2 := p2
-                        fp3 := p3
-                        fp4 := p4
-                        fp5 := p5
-                        fb0 := b0
-                        fb1 := b1
-                        fb2 := b2
-                        fb3 := b3
-                        fb4 := b4
-                        fb5 := b5
-                        fW2Ret   := retW2
-                        fW3Ext   := extW3
-                        fW4Ret   := retW4
-                        fW2Valid := vW2
-                        fW3Valid := vW3
-                        fW4Valid := vW4
-                        fW5Valid := vW5
+                        foundWave := 5; foundBull := false
+                        fp0:=p0; fp1:=p1; fp2:=p2; fp3:=p3; fp4:=p4; fp5:=p5
+                        fb0:=b0; fb1:=b1; fb2:=b2; fb3:=b3; fb4:=b4; fb5:=b5
+                        fW2Ret:=retW2; fW3Ext:=extW3; fW4Ret:=retW4
+                        fW2Valid:=vW2; fW3Valid:=vW3; fW4Valid:=vW4; fW5Valid:=vW5
 
     [foundWave, foundBull, fp0, fp1, fp2, fp3, fp4, fp5, fb0, fb1, fb2, fb3, fb4, fb5, fW2Ret, fW3Ext, fW4Ret, fW2Valid, fW3Valid, fW4Valid, fW5Valid]
 
-// Run scan
 [scanWave, scanBull, sp0, sp1, sp2, sp3, sp4, sp5, sb0, sb1, sb2, sb3, sb4, sb5, sW2Ret, sW3Ext, sW4Ret, sW2Valid, sW3Valid, sW4Valid, sW5Valid] = scanWavePattern()
 
-// Partial wave detection: check if we are building toward a 5-wave
-// Look at last 4 pivots for wave 1-2-3 in progress (wave 4 forming)
+// @function Scan for a partial 3-wave impulse (Wave 1-2-3 visible, Wave 4 forming)
 scanPartialWave() =>
     n = array.size(pivotPrices)
-    partWave  = 0
-    partBull  = true
-    pp0 = 0.0
-    pp1 = 0.0
-    pp2 = 0.0
-    pp3 = 0.0
-    ppb0 = 0
-    ppb1 = 0
-    ppb2 = 0
-    ppb3 = 0
-    pW2Ret   = 0.0
-    pW3Ext   = 0.0
-    pW2Valid = false
-    pW3Valid = false
+    partWave = 0; partBull = true
+    pp0=0.0; pp1=0.0; pp2=0.0; pp3=0.0
+    ppb0=0;  ppb1=0;  ppb2=0;  ppb3=0
+    pW2Ret=0.0; pW3Ext=0.0; pW2Valid=false; pW3Valid=false
 
     if n >= 4
         for startIdx = math.max(0, n - 8) to n - 4
             if partWave >= 3
                 break
-
             pType0 = array.get(pivotTypes, startIdx)
-            
+
             // Bullish partial
             if pType0 == -1 and isBullish
-                p0 = array.get(pivotPrices, startIdx)
-                b0 = array.get(pivotBars,   startIdx)
-                p1 = array.get(pivotPrices, startIdx + 1)
-                b1 = array.get(pivotBars,   startIdx + 1)
-                p2 = array.get(pivotPrices, startIdx + 2)
-                b2 = array.get(pivotBars,   startIdx + 2)
-                p3 = array.get(pivotPrices, startIdx + 3)
-                b3 = array.get(pivotBars,   startIdx + 3)
-
+                p0=array.get(pivotPrices,startIdx);  b0=array.get(pivotBars,startIdx)
+                p1=array.get(pivotPrices,startIdx+1);b1=array.get(pivotBars,startIdx+1)
+                p2=array.get(pivotPrices,startIdx+2);b2=array.get(pivotBars,startIdx+2)
+                p3=array.get(pivotPrices,startIdx+3);b3=array.get(pivotBars,startIdx+3)
                 w1Len = p1 - p0
                 if p2 > p0 and p1 > p0 and p3 > p2 and p3 > p1 and w1Len > 0
                     retW2 = (p1 - p2) / w1Len
@@ -398,32 +417,17 @@ scanPartialWave() =>
                     vW2 = retW2 >= w2RetLow and retW2 <= w2RetHigh
                     vW3 = extW3 >= w3ExtMin
                     if vW2
-                        partWave := 3
-                        partBull := true
-                        pp0  := p0
-                        pp1  := p1
-                        pp2  := p2
-                        pp3  := p3
-                        ppb0 := b0
-                        ppb1 := b1
-                        ppb2 := b2
-                        ppb3 := b3
-                        pW2Ret   := retW2
-                        pW3Ext   := extW3
-                        pW2Valid := vW2
-                        pW3Valid := vW3
+                        partWave:=3; partBull:=true
+                        pp0:=p0; pp1:=p1; pp2:=p2; pp3:=p3
+                        ppb0:=b0; ppb1:=b1; ppb2:=b2; ppb3:=b3
+                        pW2Ret:=retW2; pW3Ext:=extW3; pW2Valid:=vW2; pW3Valid:=vW3
 
             // Bearish partial
             if pType0 == 1 and not isBullish
-                p0 = array.get(pivotPrices, startIdx)
-                b0 = array.get(pivotBars,   startIdx)
-                p1 = array.get(pivotPrices, startIdx + 1)
-                b1 = array.get(pivotBars,   startIdx + 1)
-                p2 = array.get(pivotPrices, startIdx + 2)
-                b2 = array.get(pivotBars,   startIdx + 2)
-                p3 = array.get(pivotPrices, startIdx + 3)
-                b3 = array.get(pivotBars,   startIdx + 3)
-
+                p0=array.get(pivotPrices,startIdx);  b0=array.get(pivotBars,startIdx)
+                p1=array.get(pivotPrices,startIdx+1);b1=array.get(pivotBars,startIdx+1)
+                p2=array.get(pivotPrices,startIdx+2);b2=array.get(pivotBars,startIdx+2)
+                p3=array.get(pivotPrices,startIdx+3);b3=array.get(pivotBars,startIdx+3)
                 w1Len = p0 - p1
                 if p2 < p0 and p1 < p0 and p3 < p2 and p3 < p1 and w1Len > 0
                     retW2 = (p2 - p1) / w1Len
@@ -432,24 +436,82 @@ scanPartialWave() =>
                     vW2 = retW2 >= w2RetLow and retW2 <= w2RetHigh
                     vW3 = extW3 >= w3ExtMin
                     if vW2
-                        partWave := 3
-                        partBull := false
-                        pp0  := p0
-                        pp1  := p1
-                        pp2  := p2
-                        pp3  := p3
-                        ppb0 := b0
-                        ppb1 := b1
-                        ppb2 := b2
-                        ppb3 := b3
-                        pW2Ret   := retW2
-                        pW3Ext   := extW3
-                        pW2Valid := vW2
-                        pW3Valid := vW3
+                        partWave:=3; partBull:=false
+                        pp0:=p0; pp1:=p1; pp2:=p2; pp3:=p3
+                        ppb0:=b0; ppb1:=b1; ppb2:=b2; ppb3:=b3
+                        pW2Ret:=retW2; pW3Ext:=extW3; pW2Valid:=vW2; pW3Valid:=vW3
 
     [partWave, partBull, pp0, pp1, pp2, pp3, ppb0, ppb1, ppb2, ppb3, pW2Ret, pW3Ext, pW2Valid, pW3Valid]
 
 [partWave, partBull, pp0, pp1, pp2, pp3, ppb0, ppb1, ppb2, ppb3, pW2Ret, pW3Ext, pW2Valid, pW3Valid] = scanPartialWave()
+
+// ============================================================================
+// CORRECTIVE WAVE DETECTION (ABC Patterns)
+// ============================================================================
+
+// @function Detect ABC corrective patterns (zigzag or flat) in the pivot array.
+// Zigzag: B retraces 50-78.6% of A; C >= 90% of A in same direction as A.
+// Flat:   B retraces 80-100% of A; C 80-162% of A in same direction as A.
+// For bearish ABC the sequence is: high->low->high->low (p0,p1,p2,p3).
+// For bullish ABC the sequence is: low->high->low->high (p0,p1,p2,p3).
+// Labels (A) at p1, (B) at p2, (C) at p3.
+// @returns [found, type, isBullCorr, p0, p1, p2, p3, b0, b1, b2, b3]
+detectCorrectiveWaves() =>
+    n = array.size(pivotPrices)
+    corrFound = false
+    corrType  = "None"
+    corrBull  = true
+    cp0=0.0; cp1=0.0; cp2=0.0; cp3=0.0
+    cb0=0;   cb1=0;   cb2=0;   cb3=0
+    tol = correctionTolerance
+
+    if n >= 4
+        for startIdx = math.max(0, n - 8) to n - 4
+            if corrFound
+                break
+            pTypeA = array.get(pivotTypes, startIdx)
+            p0 = array.get(pivotPrices, startIdx);     b0 = array.get(pivotBars, startIdx)
+            p1 = array.get(pivotPrices, startIdx + 1); b1 = array.get(pivotBars, startIdx + 1)
+            p2 = array.get(pivotPrices, startIdx + 2); b2 = array.get(pivotBars, startIdx + 2)
+            p3 = array.get(pivotPrices, startIdx + 3); b3 = array.get(pivotBars, startIdx + 3)
+
+            // Bearish ABC: high->low->high->low
+            if pTypeA == 1 and p1 < p0 and p2 > p1 and p2 < p0 and p3 < p2
+                wALen = p0 - p1
+                wBLen = p2 - p1
+                wCLen = p2 - p3
+                if wALen > 0
+                    bRet = wBLen / wALen
+                    cExt = wCLen / wALen
+                    if not corrFound and bRet >= (FIB_500 - tol) and bRet <= (FIB_786 + tol) and cExt >= (0.9 - tol)
+                        corrFound:=true; corrType:="Zigzag"; corrBull:=false
+                        cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
+                        cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
+                    else if not corrFound and bRet >= (0.80 - tol) and bRet <= (1.00 + tol) and cExt >= (0.80 - tol) and cExt <= (FIB_1618 + tol)
+                        corrFound:=true; corrType:="Flat"; corrBull:=false
+                        cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
+                        cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
+
+            // Bullish ABC: low->high->low->high
+            if pTypeA == -1 and p1 > p0 and p2 < p1 and p2 > p0 and p3 > p2 and not corrFound
+                wALen = p1 - p0
+                wBLen = p1 - p2
+                wCLen = p3 - p2
+                if wALen > 0
+                    bRet = wBLen / wALen
+                    cExt = wCLen / wALen
+                    if not corrFound and bRet >= (FIB_500 - tol) and bRet <= (FIB_786 + tol) and cExt >= (0.9 - tol)
+                        corrFound:=true; corrType:="Zigzag"; corrBull:=true
+                        cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
+                        cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
+                    else if not corrFound and bRet >= (0.80 - tol) and bRet <= (1.00 + tol) and cExt >= (0.80 - tol) and cExt <= (FIB_1618 + tol)
+                        corrFound:=true; corrType:="Flat"; corrBull:=true
+                        cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
+                        cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
+
+    [corrFound, corrType, corrBull, cp0, cp1, cp2, cp3, cb0, cb1, cb2, cb3]
+
+[corrFound, corrType, corrBull, corrP0, corrP1, corrP2, corrP3, corrB0, corrB1, corrB2, corrB3] = detectCorrectiveWaves()
 
 // ============================================================================
 // STATE UPDATE
@@ -461,181 +523,338 @@ newPartial = partWave == 3 and scanWave < 5 and (na(w0Bar) or ppb0 != w0Bar or p
 if newPattern
     detectedWave  := 5
     patternBull   := scanBull
-    w0Price       := sp0
-    w0Bar         := sb0
-    w1Price       := sp1
-    w1Bar         := sb1
-    w2Price       := sp2
-    w2Bar         := sb2
-    w3Price       := sp3
-    w3Bar         := sb3
-    w4Price       := sp4
-    w4Bar         := sb4
-    w5Price       := sp5
-    w5Bar         := sb5
-    w2Retracement := sW2Ret
-    w3Extension   := sW3Ext
-    w4Retracement := sW4Ret
-    w2FibValid    := sW2Valid
-    w3FibValid    := sW3Valid
-    w4FibValid    := sW4Valid
-    w5FibValid    := sW5Valid
+    w0Price:=sp0; w0Bar:=sb0
+    w1Price:=sp1; w1Bar:=sb1
+    w2Price:=sp2; w2Bar:=sb2
+    w3Price:=sp3; w3Bar:=sb3
+    w4Price:=sp4; w4Bar:=sb4
+    w5Price:=sp5; w5Bar:=sb5
+    w2Retracement:=sW2Ret; w3Extension:=sW3Ext; w4Retracement:=sW4Ret
+    w2FibValid:=sW2Valid; w3FibValid:=sW3Valid; w4FibValid:=sW4Valid; w5FibValid:=sW5Valid
+    // Run strict 8-rule validation on the complete pattern
+    [cs, vc] = validateElliotRules(scanBull, sp0, sp1, sp2, sp3, sp4, sp5)
+    complianceScore := cs
+    violationCount  := vc
 
 if newPartial
     detectedWave  := 3
     patternBull   := partBull
-    w0Price       := pp0
-    w0Bar         := ppb0
-    w1Price       := pp1
-    w1Bar         := ppb1
-    w2Price       := pp2
-    w2Bar         := ppb2
-    w3Price       := pp3
-    w3Bar         := ppb3
-    w4Price       := na
-    w4Bar         := na
-    w5Price       := na
-    w5Bar         := na
-    w2Retracement := pW2Ret
-    w3Extension   := pW3Ext
-    w4Retracement := na
-    w2FibValid    := pW2Valid
-    w3FibValid    := pW3Valid
-    w4FibValid    := false
-    w5FibValid    := false
+    w0Price:=pp0; w0Bar:=ppb0
+    w1Price:=pp1; w1Bar:=ppb1
+    w2Price:=pp2; w2Bar:=ppb2
+    w3Price:=pp3; w3Bar:=ppb3
+    w4Price:=na;  w4Bar:=na
+    w5Price:=na;  w5Bar:=na
+    w2Retracement:=pW2Ret; w3Extension:=pW3Ext; w4Retracement:=na
+    w2FibValid:=pW2Valid; w3FibValid:=pW3Valid; w4FibValid:=false; w5FibValid:=false
+    // Partial compliance estimate based on available Fibonacci checks
+    complianceScore := pW2Valid ? (pW3Valid ? 75 : 50) : 25
+    violationCount  := pW2Valid ? (pW3Valid ? 0 : 1) : 2
 
 // ============================================================================
-// DRAWING: WAVE LINES & LABELS
+// DRAWING: PRIMARY WAVE LINES & LABELS
 // ============================================================================
 
-var line[] waveLines  = array.new_line(0)
+var line[]  waveLines  = array.new_line(0)
 var label[] waveLabels = array.new_label(0)
 
-// Clean previous drawings
-if newPattern or newPartial
+// Gate: only show pattern when compliance meets threshold in strict mode
+patternVisible = not strictMode or complianceScore >= int(minComplianceScore)
+
+if (newPattern or newPartial) and patternVisible
     while array.size(waveLines) > 0
         line.delete(array.pop(waveLines))
     while array.size(waveLabels) > 0
         label.delete(array.pop(waveLabels))
 
-    wCol = patternBull ? bullColor : bearColor
+    wCol  = patternBull ? bullColor : bearColor
     lSize = getLabelSize(labelSize)
 
-    // Draw Wave 0 -> 1
+    // Wave 0 -> 1
     array.push(waveLines, line.new(w0Bar, w0Price, w1Bar, w1Price, color=wCol, width=2))
-    array.push(waveLabels, label.new(w0Bar, w0Price, "0", style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
-    array.push(waveLabels, label.new(w1Bar, w1Price, "(1)", style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+    array.push(waveLabels, label.new(w0Bar, w0Price, "0",
+         style=patternBull ? label.style_label_up : label.style_label_down,
+         color=color.new(wCol,80), textcolor=wCol, size=lSize))
+    array.push(waveLabels, label.new(w1Bar, w1Price, "(1)",
+         style=patternBull ? label.style_label_down : label.style_label_up,
+         color=color.new(wCol,80), textcolor=wCol, size=lSize))
 
-    // Draw Wave 1 -> 2
+    // Wave 1 -> 2
     array.push(waveLines, line.new(w1Bar, w1Price, w2Bar, w2Price, color=wCol, width=2))
-    fibInfo2 = w2FibValid ? "\n[v] " + str.tostring(w2Retracement * 100, "#.#") + "% ret" : ""
-    array.push(waveLabels, label.new(w2Bar, w2Price, "(2)" + fibInfo2, style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+    fibInfo2 = w2FibValid ? "\n[v] " + str.tostring(w2Retracement*100,"#.#") + "% ret" : ""
+    array.push(waveLabels, label.new(w2Bar, w2Price, "(2)" + fibInfo2,
+         style=patternBull ? label.style_label_up : label.style_label_down,
+         color=color.new(wCol,80), textcolor=wCol, size=lSize))
 
-    // Draw Wave 2 -> 3
+    // Wave 2 -> 3
     array.push(waveLines, line.new(w2Bar, w2Price, w3Bar, w3Price, color=wCol, width=2))
-    fibInfo3 = w3FibValid ? "\n[v] " + str.tostring(w3Extension * 100, "#.#") + "% ext" : ""
-    array.push(waveLabels, label.new(w3Bar, w3Price, "(3)" + fibInfo3, style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+    fibInfo3 = w3FibValid ? "\n[v] " + str.tostring(w3Extension*100,"#.#") + "% ext" : ""
+    array.push(waveLabels, label.new(w3Bar, w3Price, "(3)" + fibInfo3,
+         style=patternBull ? label.style_label_down : label.style_label_up,
+         color=color.new(wCol,80), textcolor=wCol, size=lSize))
 
     if detectedWave >= 5 and not na(w4Bar) and not na(w5Bar)
-        // Draw Wave 3 -> 4
+        // Wave 3 -> 4
         array.push(waveLines, line.new(w3Bar, w3Price, w4Bar, w4Price, color=wCol, width=2))
-        fibInfo4 = w4FibValid ? "\n[v] " + str.tostring(w4Retracement * 100, "#.#") + "% ret" : ""
-        array.push(waveLabels, label.new(w4Bar, w4Price, "(4)" + fibInfo4, style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+        fibInfo4 = w4FibValid ? "\n[v] " + str.tostring(w4Retracement*100,"#.#") + "% ret" : ""
+        array.push(waveLabels, label.new(w4Bar, w4Price, "(4)" + fibInfo4,
+             style=patternBull ? label.style_label_up : label.style_label_down,
+             color=color.new(wCol,80), textcolor=wCol, size=lSize))
 
-        // Draw Wave 4 -> 5
+        // Wave 4 -> 5
         array.push(waveLines, line.new(w4Bar, w4Price, w5Bar, w5Price, color=wCol, width=2))
-        array.push(waveLabels, label.new(w5Bar, w5Price, "(5)", style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+        array.push(waveLabels, label.new(w5Bar, w5Price, "(5)",
+             style=patternBull ? label.style_label_down : label.style_label_up,
+             color=color.new(wCol,80), textcolor=wCol, size=lSize))
 
 // ============================================================================
-// FIBONACCI LEVEL LINES
+// CORRECTIVE WAVE DRAWING
 // ============================================================================
 
-var line[] fibLines  = array.new_line(0)
-var label[] fibLabels = array.new_label(0)
+var line[]  corrLines  = array.new_line(0)
+var label[] corrLabels = array.new_label(0)
+var int lastCorrB0 = na
+var int lastCorrB3 = na
+
+newCorr = corrFound and enableCorrectionDetection and
+     (na(lastCorrB0) or corrB0 != lastCorrB0 or corrB3 != lastCorrB3)
+
+if newCorr
+    lastCorrB0 := corrB0
+    lastCorrB3 := corrB3
+    while array.size(corrLines) > 0
+        line.delete(array.pop(corrLines))
+    while array.size(corrLabels) > 0
+        label.delete(array.pop(corrLabels))
+
+    if showCorrectionLabels
+        lSize = getLabelSize(labelSize)
+        // Draw A-B-C dashed lines
+        array.push(corrLines, line.new(corrB0, corrP0, corrB1, corrP1, color=corrColor, width=1, style=line.style_dashed))
+        array.push(corrLines, line.new(corrB1, corrP1, corrB2, corrP2, color=corrColor, width=1, style=line.style_dashed))
+        array.push(corrLines, line.new(corrB2, corrP2, corrB3, corrP3, color=corrColor, width=1, style=line.style_dashed))
+        // Labels at wave endpoints
+        aStyle = corrBull ? label.style_label_down : label.style_label_up
+        bStyle = corrBull ? label.style_label_up   : label.style_label_down
+        cStyle = corrBull ? label.style_label_down : label.style_label_up
+        array.push(corrLabels, label.new(corrB1, corrP1, "(A)\n" + corrType,
+             style=aStyle, color=color.new(corrColor,70), textcolor=corrColor, size=lSize))
+        array.push(corrLabels, label.new(corrB2, corrP2, "(B)",
+             style=bStyle, color=color.new(corrColor,70), textcolor=corrColor, size=lSize))
+        array.push(corrLabels, label.new(corrB3, corrP3, "(C)",
+             style=cStyle, color=color.new(corrColor,70), textcolor=corrColor, size=lSize))
+
+// ============================================================================
+// SUB-WAVE LABELING (hierarchical degree)
+// ============================================================================
+
+// Sub-wave pivots use a finer lookback to reveal internal structure
+subPivotHigh = enableSubWaveLabeling ? ta.pivothigh(high, subZigzagLen, subZigzagLen) : na
+subPivotLow  = enableSubWaveLabeling ? ta.pivotlow(low,  subZigzagLen, subZigzagLen) : na
+
+var float[] subPivotPrices = array.new_float(0)
+var int[]   subPivotBars   = array.new_int(0)
+var int[]   subPivotTypes  = array.new_int(0)
+
+// Populate sub-wave pivot buffer
+if enableSubWaveLabeling
+    if not na(subPivotHigh)
+        sBar = bar_index - subZigzagLen
+        sSz  = array.size(subPivotBars)
+        if sSz == 0 or (sBar - array.get(subPivotBars, sSz-1)) >= subZigzagLen
+            lastSubHigh = sSz > 0 ? array.get(subPivotTypes, sSz-1) == 1 : false
+            if lastSubHigh
+                if subPivotHigh > array.get(subPivotPrices, sSz-1)
+                    array.set(subPivotPrices, sSz-1, subPivotHigh)
+                    array.set(subPivotBars,   sSz-1, sBar)
+            else
+                array.push(subPivotPrices, subPivotHigh)
+                array.push(subPivotBars,   sBar)
+                array.push(subPivotTypes,  1)
+                if array.size(subPivotPrices) > MAX_PIVOTS
+                    array.shift(subPivotPrices)
+                    array.shift(subPivotBars)
+                    array.shift(subPivotTypes)
+
+    if not na(subPivotLow)
+        sBar = bar_index - subZigzagLen
+        sSz  = array.size(subPivotBars)
+        if sSz == 0 or (sBar - array.get(subPivotBars, sSz-1)) >= subZigzagLen
+            lastSubLow = sSz > 0 ? array.get(subPivotTypes, sSz-1) == -1 : false
+            if lastSubLow
+                if subPivotLow < array.get(subPivotPrices, sSz-1)
+                    array.set(subPivotPrices, sSz-1, subPivotLow)
+                    array.set(subPivotBars,   sSz-1, sBar)
+            else
+                array.push(subPivotPrices, subPivotLow)
+                array.push(subPivotBars,   sBar)
+                array.push(subPivotTypes,  -1)
+                if array.size(subPivotPrices) > MAX_PIVOTS
+                    array.shift(subPivotPrices)
+                    array.shift(subPivotBars)
+                    array.shift(subPivotTypes)
+
+var label[] subWaveLabels = array.new_label(0)
+
+// @function Draw sub-wave labels for pivots found within a primary wave's bar range.
+// @param wNum   Primary wave number for labeling (1, 3, or 5)
+// @param wSBar  Start bar of the primary wave
+// @param wEBar  End bar of the primary wave
+labelSubWaves(wNum, wSBar, wEBar) =>
+    n       = array.size(subPivotPrices)
+    lSize   = getLabelSize(subWaveLabelSize)
+    letters = array.from("a", "b", "c", "d", "e")
+    cnt     = 0
+    for i = 0 to n - 1
+        sBar   = array.get(subPivotBars,   i)
+        sPrice = array.get(subPivotPrices, i)
+        sType  = array.get(subPivotTypes,  i)
+        if sBar >= wSBar and sBar <= wEBar and cnt < 5
+            lbl    = "(" + str.tostring(wNum) + array.get(letters, cnt) + ")"
+            lStyle = sType == 1 ? label.style_label_down : label.style_label_up
+            array.push(subWaveLabels, label.new(sBar, sPrice, lbl,
+                 style=lStyle, color=color.new(color.gray,80), textcolor=color.gray, size=lSize))
+            cnt += 1
+
+if enableSubWaveLabeling and (newPattern or newPartial) and detectedWave >= 3
+    while array.size(subWaveLabels) > 0
+        label.delete(array.pop(subWaveLabels))
+    // Wave 1 sub-waves
+    if not na(w0Bar) and not na(w1Bar)
+        labelSubWaves(1, w0Bar, w1Bar)
+    // Wave 3 sub-waves
+    if not na(w2Bar) and not na(w3Bar)
+        labelSubWaves(3, w2Bar, w3Bar)
+    // Wave 5 sub-waves (complete pattern only)
+    if detectedWave >= 5 and not na(w4Bar) and not na(w5Bar)
+        labelSubWaves(5, w4Bar, w5Bar)
+
+// ============================================================================
+// FIBONACCI LEVELS (core + extended ratios + confluence zones)
+// ============================================================================
+
+var line[]  fibLines   = array.new_line(0)
+var label[] fibLabels  = array.new_label(0)
+var box[]   conflBoxes = array.new_box(0)
 
 if showFibLines and (newPattern or newPartial)
     while array.size(fibLines) > 0
         line.delete(array.pop(fibLines))
     while array.size(fibLabels) > 0
         label.delete(array.pop(fibLabels))
+    while array.size(conflBoxes) > 0
+        box.delete(array.pop(conflBoxes))
 
-    lSize = getLabelSize(labelSize)
+    lSize        = getLabelSize(labelSize)
+    patternWidth = not na(w5Bar) ? w5Bar - w0Bar : (not na(w3Bar) ? w3Bar - w0Bar : w1Bar - w0Bar)
+    rightEdge    = bar_index + math.max(projectionLookahead, math.round(patternWidth * 0.5))
 
     if not na(w0Price) and not na(w1Price)
-        w1Len      = math.abs(w1Price - w0Price)
-        // Dynamic right edge: proportional to pattern width, min 15 bars
-        patternWidth = not na(w5Bar) ? w5Bar - w0Bar : (not na(w3Bar) ? w3Bar - w0Bar : w1Bar - w0Bar)
-        rightEdge  = bar_index + math.max(15, math.round(patternWidth * 0.5))
-
-        // Key Fibonacci levels from Wave 1 (Wave 2 retracement zones)
-        fib236 = patternBull ? w1Price - w1Len * 0.236 : w1Price + w1Len * 0.236
-        fib382 = patternBull ? w1Price - w1Len * 0.382 : w1Price + w1Len * 0.382
-        fib500 = patternBull ? w1Price - w1Len * 0.500 : w1Price + w1Len * 0.500
-        fib618 = patternBull ? w1Price - w1Len * 0.618 : w1Price + w1Len * 0.618
-        fib786 = patternBull ? w1Price - w1Len * 0.786 : w1Price + w1Len * 0.786
-
-        // Wave 3 extension targets projected from Wave 2 endpoint
-        ext1000 = patternBull ? w2Price + w1Len * 1.000 : w2Price - w1Len * 1.000
-        ext1618 = patternBull ? w2Price + w1Len * 1.618 : w2Price - w1Len * 1.618
-        ext2618 = patternBull ? w2Price + w1Len * 2.618 : w2Price - w1Len * 2.618
-
-        // Wave 1 retracement levels (Wave 2 landing zone)
+        w1Len = math.abs(w1Price - w0Price)
         leftBar = w1Bar
-        array.push(fibLines, line.new(leftBar, fib236, rightEdge, fib236, color=color.new(fibColor, 50), style=line.style_dotted, width=fibLineWidth, extend=extend.none))
-        array.push(fibLines, line.new(leftBar, fib382, rightEdge, fib382, color=color.new(fibColor, 40), style=line.style_dotted, width=fibLineWidth, extend=extend.none))
-        array.push(fibLines, line.new(leftBar, fib500, rightEdge, fib500, color=color.new(fibColor, 30), style=line.style_dashed, width=fibLineWidth, extend=extend.none))
-        array.push(fibLines, line.new(leftBar, fib618, rightEdge, fib618, color=color.new(fibColor, 10), style=line.style_solid, width=fibLineWidth, extend=extend.none))
-        array.push(fibLines, line.new(leftBar, fib786, rightEdge, fib786, color=color.new(fibColor, 30), style=line.style_dashed, width=fibLineWidth, extend=extend.none))
+
+        // === Wave 2 retracement levels (from Wave 1 top) ===
+        fib236 = patternBull ? w1Price - w1Len * FIB_236 : w1Price + w1Len * FIB_236
+        fib382 = patternBull ? w1Price - w1Len * FIB_382 : w1Price + w1Len * FIB_382
+        fib500 = patternBull ? w1Price - w1Len * FIB_500 : w1Price + w1Len * FIB_500
+        fib618 = patternBull ? w1Price - w1Len * FIB_618 : w1Price + w1Len * FIB_618
+        fib786 = patternBull ? w1Price - w1Len * FIB_786 : w1Price + w1Len * FIB_786
+
+        array.push(fibLines, line.new(leftBar,fib236,rightEdge,fib236, color=color.new(fibColor,50), style=line.style_dotted, width=fibLineWidth))
+        array.push(fibLines, line.new(leftBar,fib382,rightEdge,fib382, color=color.new(fibColor,40), style=line.style_dotted, width=fibLineWidth))
+        array.push(fibLines, line.new(leftBar,fib500,rightEdge,fib500, color=color.new(fibColor,30), style=line.style_dashed, width=fibLineWidth))
+        array.push(fibLines, line.new(leftBar,fib618,rightEdge,fib618, color=color.new(fibColor,10), style=line.style_solid,  width=fibLineWidth))
+        array.push(fibLines, line.new(leftBar,fib786,rightEdge,fib786, color=color.new(fibColor,30), style=line.style_dashed, width=fibLineWidth))
 
         if showFibLabels
-            array.push(fibLabels, label.new(rightEdge, fib236, "23.6%", style=label.style_none, textcolor=fibColor, size=lSize))
-            array.push(fibLabels, label.new(rightEdge, fib382, "38.2%", style=label.style_none, textcolor=fibColor, size=lSize))
-            array.push(fibLabels, label.new(rightEdge, fib500, "50%", style=label.style_none, textcolor=fibColor, size=lSize))
-            array.push(fibLabels, label.new(rightEdge, fib618, "61.8% (W2 ideal)", style=label.style_none, textcolor=fibColor, size=lSize))
-            array.push(fibLabels, label.new(rightEdge, fib786, "78.6%", style=label.style_none, textcolor=fibColor, size=lSize))
+            array.push(fibLabels, label.new(rightEdge,fib236,"23.6%",             style=label.style_none,textcolor=fibColor,size=lSize))
+            array.push(fibLabels, label.new(rightEdge,fib382,"38.2%",             style=label.style_none,textcolor=fibColor,size=lSize))
+            array.push(fibLabels, label.new(rightEdge,fib500,"50%",               style=label.style_none,textcolor=fibColor,size=lSize))
+            array.push(fibLabels, label.new(rightEdge,fib618,"61.8% (W2 ideal)", style=label.style_none,textcolor=fibColor,size=lSize))
+            array.push(fibLabels, label.new(rightEdge,fib786,"78.6%",             style=label.style_none,textcolor=fibColor,size=lSize))
 
-        // Wave 3 extension targets
-        array.push(fibLines, line.new(leftBar, ext1000, rightEdge, ext1000, color=color.new(tpColor, 50), style=line.style_dotted, width=fibLineWidth, extend=extend.none))
-        array.push(fibLines, line.new(leftBar, ext1618, rightEdge, ext1618, color=color.new(tpColor, 20), style=line.style_solid, width=fibLineWidth, extend=extend.none))
-        array.push(fibLines, line.new(leftBar, ext2618, rightEdge, ext2618, color=color.new(tpColor, 40), style=line.style_dashed, width=fibLineWidth, extend=extend.none))
+        // === Wave 3 extension targets (projected from Wave 2 endpoint) ===
+        w2Ref   = not na(w2Price) ? w2Price : w0Price
+        ext1000 = patternBull ? w2Ref + w1Len * FIB_1000 : w2Ref - w1Len * FIB_1000
+        ext1618 = patternBull ? w2Ref + w1Len * FIB_1618 : w2Ref - w1Len * FIB_1618
+        ext2618 = patternBull ? w2Ref + w1Len * FIB_2618 : w2Ref - w1Len * FIB_2618
+
+        array.push(fibLines, line.new(leftBar,ext1000,rightEdge,ext1000, color=color.new(tpColor,50), style=line.style_dotted, width=fibLineWidth))
+        array.push(fibLines, line.new(leftBar,ext1618,rightEdge,ext1618, color=color.new(tpColor,20), style=line.style_solid,  width=fibLineWidth))
+        array.push(fibLines, line.new(leftBar,ext2618,rightEdge,ext2618, color=color.new(tpColor,40), style=line.style_dashed, width=fibLineWidth))
+
         if showFibLabels
-            array.push(fibLabels, label.new(rightEdge, ext1000, "100% ext", style=label.style_none, textcolor=tpColor, size=lSize))
-            array.push(fibLabels, label.new(rightEdge, ext1618, "161.8% ext (W3 target)", style=label.style_none, textcolor=tpColor, size=lSize))
-            array.push(fibLabels, label.new(rightEdge, ext2618, "261.8% ext", style=label.style_none, textcolor=tpColor, size=lSize))
+            array.push(fibLabels, label.new(rightEdge,ext1000,"100% ext",               style=label.style_none,textcolor=tpColor,size=lSize))
+            array.push(fibLabels, label.new(rightEdge,ext1618,"161.8% ext (W3 target)", style=label.style_none,textcolor=tpColor,size=lSize))
+            array.push(fibLabels, label.new(rightEdge,ext2618,"261.8% ext",             style=label.style_none,textcolor=tpColor,size=lSize))
 
-        // Wave 4 retracement levels (from Wave 3 if available)
-        if not na(w3Price) and not na(w2Price)
-            w3Len  = math.abs(w3Price - w2Price)
-            w4_236 = patternBull ? w3Price - w3Len * 0.236 : w3Price + w3Len * 0.236
-            w4_382 = patternBull ? w3Price - w3Len * 0.382 : w3Price + w3Len * 0.382
-            w4_500 = patternBull ? w3Price - w3Len * 0.500 : w3Price + w3Len * 0.500
+        // === Extended ratios (127.2%, 200%, 423.6%) ===
+        if showExtendedRatios
+            ext1272 = patternBull ? w2Ref + w1Len * FIB_1272 : w2Ref - w1Len * FIB_1272
+            ext2000 = patternBull ? w2Ref + w1Len * FIB_2000 : w2Ref - w1Len * FIB_2000
+            ext4236 = patternBull ? w2Ref + w1Len * FIB_4236 : w2Ref - w1Len * FIB_4236
 
-            leftBar3 = w3Bar
-            array.push(fibLines, line.new(leftBar3, w4_236, rightEdge, w4_236, color=color.new(fibColor, 40), style=line.style_dotted, width=fibLineWidth, extend=extend.none))
-            array.push(fibLines, line.new(leftBar3, w4_382, rightEdge, w4_382, color=color.new(fibColor, 20), style=line.style_solid, width=fibLineWidth, extend=extend.none))
-            array.push(fibLines, line.new(leftBar3, w4_500, rightEdge, w4_500, color=color.new(fibColor, 40), style=line.style_dotted, width=fibLineWidth, extend=extend.none))
+            array.push(fibLines, line.new(leftBar,ext1272,rightEdge,ext1272, color=color.new(tpColor,65), style=line.style_dotted, width=fibLineWidth))
+            array.push(fibLines, line.new(leftBar,ext2000,rightEdge,ext2000, color=color.new(tpColor,65), style=line.style_dotted, width=fibLineWidth))
+            array.push(fibLines, line.new(leftBar,ext4236,rightEdge,ext4236, color=color.new(tpColor,75), style=line.style_dotted, width=fibLineWidth))
 
             if showFibLabels
-                array.push(fibLabels, label.new(rightEdge, w4_236, "23.6% W3", style=label.style_none, textcolor=fibColor, size=lSize))
-                array.push(fibLabels, label.new(rightEdge, w4_382, "38.2% W3 (W4 ideal)", style=label.style_none, textcolor=fibColor, size=lSize))
-                array.push(fibLabels, label.new(rightEdge, w4_500, "50% W3", style=label.style_none, textcolor=fibColor, size=lSize))
+                array.push(fibLabels, label.new(rightEdge,ext1272,"127.2% ext",  style=label.style_none,textcolor=color.new(tpColor,40),size=lSize))
+                array.push(fibLabels, label.new(rightEdge,ext2000,"200% ext",    style=label.style_none,textcolor=color.new(tpColor,40),size=lSize))
+                array.push(fibLabels, label.new(rightEdge,ext4236,"423.6% ext",  style=label.style_none,textcolor=color.new(tpColor,50),size=lSize))
+
+        // === Wave 4 retracement levels (from Wave 3 if available) ===
+        if not na(w3Price) and not na(w2Price)
+            w3Len  = math.abs(w3Price - w2Price)
+            w4_236 = patternBull ? w3Price - w3Len * FIB_236 : w3Price + w3Len * FIB_236
+            w4_382 = patternBull ? w3Price - w3Len * FIB_382 : w3Price + w3Len * FIB_382
+            w4_500 = patternBull ? w3Price - w3Len * FIB_500 : w3Price + w3Len * FIB_500
+
+            leftBar3 = w3Bar
+            array.push(fibLines, line.new(leftBar3,w4_236,rightEdge,w4_236, color=color.new(fibColor,45), style=line.style_dotted, width=fibLineWidth))
+            array.push(fibLines, line.new(leftBar3,w4_382,rightEdge,w4_382, color=color.new(fibColor,20), style=line.style_solid,  width=fibLineWidth))
+            array.push(fibLines, line.new(leftBar3,w4_500,rightEdge,w4_500, color=color.new(fibColor,45), style=line.style_dotted, width=fibLineWidth))
+
+            if showFibLabels
+                array.push(fibLabels, label.new(rightEdge,w4_236,"23.6% W3",           style=label.style_none,textcolor=fibColor,size=lSize))
+                array.push(fibLabels, label.new(rightEdge,w4_382,"38.2% W3 (W4 ideal)",style=label.style_none,textcolor=fibColor,size=lSize))
+                array.push(fibLabels, label.new(rightEdge,w4_500,"50% W3",             style=label.style_none,textcolor=fibColor,size=lSize))
+
+            // === Confluence zone detection ===
+            if showConfluenceZones
+                tolAmt = w1Len * confluenceTolerance
+                // Helper: draw a confluence box if two levels are within tolerance
+                checkConfluence(lvA, lvB, startBar, lblA, lblB) =>
+                    if math.abs(lvA - lvB) <= tolAmt
+                        midPrice = (lvA + lvB) / 2
+                        bTop     = midPrice + tolAmt
+                        bBot     = midPrice - tolAmt
+                        array.push(conflBoxes, box.new(startBar, bTop, rightEdge, bBot,
+                             border_color=color.new(color.yellow,30),
+                             bgcolor=color.new(color.yellow,85),
+                             border_width=1))
+                        if showFibLabels
+                            array.push(fibLabels, label.new(startBar, bTop,
+                                 "Confluence: " + lblA + " / " + lblB,
+                                 style=label.style_label_down,
+                                 color=color.new(color.yellow,60),
+                                 textcolor=color.yellow, size=size.tiny))
+                checkConfluence(fib382, w4_382, w3Bar, "38.2% W1", "38.2% W3")
+                checkConfluence(fib500, w4_382, w3Bar, "50% W1",   "38.2% W3")
+                checkConfluence(fib618, w4_500, w3Bar, "61.8% W1", "50% W3")
 
 // ============================================================================
 // TRADE SIGNAL GENERATION
 // ============================================================================
 
-// Signal at Wave 2 completion -> entry for Wave 3 ride
-// Signal at Wave 4 completion -> entry for Wave 5 ride
-
-var line slLine = na
-var line tpLine = na
+var line  slLine   = na
+var line  tpLine   = na
 var label sigLabel = na
 
 signalAtW2 = false
 signalAtW4 = false
 
-if showSignals and detectedWave >= 3 and newPartial
-    // Wave 2 complete, entering Wave 3 - strong signal
+if showSignals and detectedWave >= 3 and newPartial and patternVisible
     if w2FibValid and not na(w2Bar) and (bar_index - w2Bar) < zigzagLen * 3
         signalAtW2 := true
         bufferAmt  = w0Price * slBuffer / 100.0
@@ -650,8 +869,7 @@ if showSignals and detectedWave >= 3 and newPartial
             w1Len_sig  = w0Price - w1Price
             takeProfit := w2Price - w1Len_sig * w3ExtMin
 
-if showSignals and detectedWave == 5 and newPattern
-    // Wave 4 complete, entering Wave 5
+if showSignals and detectedWave == 5 and newPattern and patternVisible
     if w4FibValid and not na(w4Bar) and (bar_index - w4Bar) < zigzagLen * 3
         signalAtW4 := true
         bufferAmt  = w4Price * slBuffer / 100.0
@@ -669,90 +887,185 @@ if showSignals and detectedWave == 5 and newPattern
 // Draw signals
 if (signalAtW2 or signalAtW4) and bar_index != lastSignalBar
     lastSignalBar := bar_index
-
-    // Delete previous signal lines
     line.delete(slLine)
     line.delete(tpLine)
     label.delete(sigLabel)
 
-    sigBar = signalAtW2 ? w2Bar : w4Bar
+    sigBar  = signalAtW2 ? w2Bar : w4Bar
     waveNum = signalAtW2 ? "3" : "5"
-    sigText = (patternBull ? "^ LONG" : "v SHORT") + " | Wave " + waveNum + "\nEntry: " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(stopLoss, format.mintick) + "\nTP: " + str.tostring(takeProfit, format.mintick)
+    sigText = (patternBull ? "^ LONG" : "v SHORT") + " | Wave " + waveNum +
+         "\nEntry: " + str.tostring(entryPrice, format.mintick) +
+         "\nSL: "    + str.tostring(stopLoss,   format.mintick) +
+         "\nTP: "    + str.tostring(takeProfit,  format.mintick)
 
-    lSize = getLabelSize(labelSize)
+    lSize    = getLabelSize(labelSize)
     sigColor = patternBull ? bullColor : bearColor
-    
+
     sigLabel := label.new(sigBar, patternBull ? entryPrice * 0.998 : entryPrice * 1.002, sigText,
          style=patternBull ? label.style_label_up : label.style_label_down,
-         color=color.new(sigColor, 20), textcolor=color.white, size=lSize)
+         color=color.new(sigColor,20), textcolor=color.white, size=lSize)
 
     if showSLLines
-        slLine := line.new(sigBar, stopLoss, bar_index + 20, stopLoss, color=slColor, style=line.style_dashed, width=2)
-
+        slLine := line.new(sigBar, stopLoss, bar_index + 20, stopLoss,
+             color=slColor, style=line.style_dashed, width=2)
     if showTPLines
-        tpLine := line.new(sigBar, takeProfit, bar_index + 20, takeProfit, color=tpColor, style=line.style_dashed, width=2)
+        tpLine := line.new(sigBar, takeProfit, bar_index + 20, takeProfit,
+             color=tpColor, style=line.style_dashed, width=2)
 
 // ============================================================================
 // ALERT CONDITIONS
 // ============================================================================
 
-alertcondition(signalAtW2 and patternBull,  title="Bullish Wave 3 Entry",  message="EW-Fib Pro: Bullish Wave 2 complete - potential Wave 3 long entry on {{ticker}} at {{close}}")
-alertcondition(signalAtW2 and not patternBull, title="Bearish Wave 3 Entry", message="EW-Fib Pro: Bearish Wave 2 complete - potential Wave 3 short entry on {{ticker}} at {{close}}")
-alertcondition(signalAtW4 and patternBull,  title="Bullish Wave 5 Entry",  message="EW-Fib Pro: Bullish Wave 4 complete - potential Wave 5 long entry on {{ticker}} at {{close}}")
-alertcondition(signalAtW4 and not patternBull, title="Bearish Wave 5 Entry", message="EW-Fib Pro: Bearish Wave 4 complete - potential Wave 5 short entry on {{ticker}} at {{close}}")
-alertcondition(newPattern, title="Full 5-Wave Detected", message="EW-Fib Pro: Complete 5-wave Elliott structure detected on {{ticker}}")
+alertcondition(signalAtW2 and patternBull,     title="Bullish Wave 3 Entry",
+     message="EW-Fib Pro: Bullish Wave 2 complete - potential Wave 3 long entry on {{ticker}} at {{close}}")
+alertcondition(signalAtW2 and not patternBull, title="Bearish Wave 3 Entry",
+     message="EW-Fib Pro: Bearish Wave 2 complete - potential Wave 3 short entry on {{ticker}} at {{close}}")
+alertcondition(signalAtW4 and patternBull,     title="Bullish Wave 5 Entry",
+     message="EW-Fib Pro: Bullish Wave 4 complete - potential Wave 5 long entry on {{ticker}} at {{close}}")
+alertcondition(signalAtW4 and not patternBull, title="Bearish Wave 5 Entry",
+     message="EW-Fib Pro: Bearish Wave 4 complete - potential Wave 5 short entry on {{ticker}} at {{close}}")
+alertcondition(newPattern,                     title="Full 5-Wave Detected",
+     message="EW-Fib Pro: Complete 5-wave Elliott structure detected on {{ticker}}")
+alertcondition(newCorr and corrFound,           title="ABC Correction Detected",
+     message="EW-Fib Pro: ABC corrective pattern detected on {{ticker}}")
+alertcondition(ruleViolationAlert and newPattern and violationCount > 0, title="Rule Violation Detected",
+     message="EW-Fib Pro: Elliott rule violation - compliance score low on {{ticker}}")
 
 // ============================================================================
-// INFO TABLE
+// ENHANCED INFO TABLE  (2 columns x 14 rows)
 // ============================================================================
 
-var table infoPanel = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 85), border_width=1, border_color=color.new(color.gray, 50))
+var table infoPanel = table.new(position.top_right, 2, 14,
+     bgcolor=color.new(color.black,85), border_width=1, border_color=color.new(color.gray,50))
 
 if barstate.islast and detectedWave >= 3
     wDir = patternBull ? "BULLISH ^" : "BEARISH v"
     wCol = patternBull ? bullColor : bearColor
 
-    table.cell(infoPanel, 0, 0, "Elliott Wave + Fib", text_color=color.white, text_size=size.small, bgcolor=color.new(wCol, 40))
-    table.cell(infoPanel, 1, 0, wDir, text_color=wCol, text_size=size.small, bgcolor=color.new(wCol, 80))
+    // Row 0: Header
+    table.cell(infoPanel, 0, 0, "Elliott Wave + Fib v2",
+         text_color=color.white, text_size=size.small, bgcolor=color.new(wCol,40))
+    table.cell(infoPanel, 1, 0, wDir,
+         text_color=wCol,        text_size=size.small, bgcolor=color.new(wCol,80))
 
-    table.cell(infoPanel, 0, 1, "Current Wave", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 1, str.tostring(detectedWave) + " of 5", text_color=color.white, text_size=size.tiny)
+    // Row 1: Wave progress
+    table.cell(infoPanel, 0, 1, "Current Wave", text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoPanel, 1, 1, str.tostring(detectedWave) + " of 5",
+         text_color=color.white, text_size=size.tiny)
 
-    table.cell(infoPanel, 0, 2, "HTF Trend", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 2, htfEnabled ? (htfTrendUp ? "Bullish" : "Bearish") : "Disabled", text_color=htfEnabled ? (htfTrendUp ? bullColor : bearColor) : color.gray, text_size=size.tiny)
+    // Row 2: HTF trend
+    table.cell(infoPanel, 0, 2, "HTF Trend",    text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoPanel, 1, 2,
+         htfEnabled ? (htfTrendUp ? "Bullish" : "Bearish") : "Disabled",
+         text_color=htfEnabled ? (htfTrendUp ? bullColor : bearColor) : color.gray,
+         text_size=size.tiny)
 
-    table.cell(infoPanel, 0, 3, "W2 Ret.", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 3, not na(w2Retracement) ? str.tostring(w2Retracement * 100, "#.#") + "%" + (w2FibValid ? " [v]" : " [x]") : "-", text_color=w2FibValid ? bullColor : color.gray, text_size=size.tiny)
+    // Row 3: Compliance score
+    compColor = showComplianceScore ?
+         (complianceScore >= 75 ? bullColor : (complianceScore >= 50 ? color.yellow : bearColor)) :
+         color.gray
+    table.cell(infoPanel, 0, 3, "Compliance",   text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoPanel, 1, 3,
+         showComplianceScore ?
+             str.tostring(complianceScore) + "% (" + str.tostring(8 - violationCount) + "/8)" :
+             "-",
+         text_color=compColor, text_size=size.tiny)
 
-    table.cell(infoPanel, 0, 4, "W3 Ext.", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 4, not na(w3Extension) ? str.tostring(w3Extension * 100, "#.#") + "%" + (w3FibValid ? " [v]" : " [x]") : "-", text_color=w3FibValid ? bullColor : color.gray, text_size=size.tiny)
+    // Row 4: Wave 2 retracement
+    table.cell(infoPanel, 0, 4, "W2 Ret.",      text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoPanel, 1, 4,
+         not na(w2Retracement) ?
+             str.tostring(w2Retracement*100,"#.#") + "%" + (w2FibValid ? " [v]" : " [x]") : "-",
+         text_color=w2FibValid ? bullColor : color.gray, text_size=size.tiny)
 
-    table.cell(infoPanel, 0, 5, "W4 Ret.", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 5, not na(w4Retracement) ? str.tostring(w4Retracement * 100, "#.#") + "%" + (w4FibValid ? " [v]" : " [x]") : "-", text_color=w4FibValid ? bullColor : color.gray, text_size=size.tiny)
+    // Row 5: Wave 3 extension
+    table.cell(infoPanel, 0, 5, "W3 Ext.",      text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoPanel, 1, 5,
+         not na(w3Extension) ?
+             str.tostring(w3Extension*100,"#.#") + "%" + (w3FibValid ? " [v]" : " [x]") : "-",
+         text_color=w3FibValid ? bullColor : color.gray, text_size=size.tiny)
 
+    // Row 6: Wave 4 retracement
+    table.cell(infoPanel, 0, 6, "W4 Ret.",      text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoPanel, 1, 6,
+         not na(w4Retracement) ?
+             str.tostring(w4Retracement*100,"#.#") + "%" + (w4FibValid ? " [v]" : " [x]") : "-",
+         text_color=w4FibValid ? bullColor : color.gray, text_size=size.tiny)
+
+    // Rows 7-9: Wave ratios (W3/W1, W5/W1, W4/W3) for complete 5-wave patterns
+    if showWaveRatios and detectedWave >= 5 and not na(w0Price) and not na(w5Price)
+        w1Len_d = math.abs(w1Price - w0Price)
+        w3Len_d = math.abs(w3Price - w2Price)
+        w5Len_d = math.abs(w5Price - w4Price)
+        w4Len_d = math.abs(w4Price - w3Price)
+        r31 = w1Len_d > 0 ? w3Len_d / w1Len_d : na
+        r51 = w1Len_d > 0 ? w5Len_d / w1Len_d : na
+        r43 = w3Len_d > 0 ? w4Len_d / w3Len_d : na
+        table.cell(infoPanel, 0, 7, "W3/W1",     text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 7,
+             not na(r31) ? str.tostring(r31,"#.##") + "x" : "-",
+             text_color=color.white, text_size=size.tiny)
+        table.cell(infoPanel, 0, 8, "W5/W1",     text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 8,
+             not na(r51) ? str.tostring(r51,"#.##") + "x" : "-",
+             text_color=color.white, text_size=size.tiny)
+        table.cell(infoPanel, 0, 9, "W4/W3",     text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 9,
+             not na(r43) ? str.tostring(r43,"#.##") + "x" : "-",
+             text_color=color.white, text_size=size.tiny)
+    else
+        table.cell(infoPanel, 0, 7, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 7, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 0, 8, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 8, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 0, 9, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 9, "", text_color=color.gray, text_size=size.tiny)
+
+    // Row 10: Correction type detected
+    table.cell(infoPanel, 0, 10, "Correction",  text_color=color.gray,  text_size=size.tiny)
+    table.cell(infoPanel, 1, 10,
+         corrFound ? corrType + (corrBull ? " Bull" : " Bear") : "None",
+         text_color=corrFound ? corrColor : color.gray, text_size=size.tiny)
+
+    // Rows 11-13: Trade levels
     if not na(entryPrice)
-        table.cell(infoPanel, 0, 6, "Entry", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 6, str.tostring(entryPrice, format.mintick), text_color=color.white, text_size=size.tiny)
-        table.cell(infoPanel, 0, 7, "Stop Loss", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 7, str.tostring(stopLoss, format.mintick), text_color=slColor, text_size=size.tiny)
-        table.cell(infoPanel, 0, 8, "Take Profit", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 8, str.tostring(takeProfit, format.mintick), text_color=tpColor, text_size=size.tiny)
+        table.cell(infoPanel, 0, 11, "Entry",      text_color=color.gray,  text_size=size.tiny)
+        table.cell(infoPanel, 1, 11, str.tostring(entryPrice, format.mintick),
+             text_color=color.white, text_size=size.tiny)
+        table.cell(infoPanel, 0, 12, "Stop Loss",  text_color=color.gray,  text_size=size.tiny)
+        table.cell(infoPanel, 1, 12, str.tostring(stopLoss,   format.mintick),
+             text_color=slColor, text_size=size.tiny)
+        table.cell(infoPanel, 0, 13, "Take Profit",text_color=color.gray,  text_size=size.tiny)
+        table.cell(infoPanel, 1, 13, str.tostring(takeProfit, format.mintick),
+             text_color=tpColor, text_size=size.tiny)
 
-        slDist = math.abs(entryPrice - stopLoss)
-        rr = slDist > 0 ? math.abs(takeProfit - entryPrice) / slDist : 0.0
-        table.cell(infoPanel, 0, 9, "Risk:Reward", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 9, "1:" + str.tostring(rr, "#.##"), text_color=rr >= 2 ? bullColor : (rr >= 1 ? color.yellow : bearColor), text_size=size.tiny)
+        slDist  = math.abs(entryPrice - stopLoss)
+        rr      = slDist > 0 ? math.abs(takeProfit - entryPrice) / slDist : 0.0
+        rrColor = rr >= 2.0 ? bullColor : (rr >= 1.0 ? color.yellow : bearColor)
+        // Overwrite row 10 with Risk:Reward when trade is active
+        table.cell(infoPanel, 0, 10, "Risk:Reward",text_color=color.gray,  text_size=size.tiny)
+        table.cell(infoPanel, 1, 10, "1:" + str.tostring(rr,"#.##"),
+             text_color=rrColor, text_size=size.tiny)
+    else
+        table.cell(infoPanel, 0, 11, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 11, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 0, 12, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 12, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 0, 13, "", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoPanel, 1, 13, "", text_color=color.gray, text_size=size.tiny)
 
 // ============================================================================
 // PLOT INVISIBLE SERIES FOR DATA WINDOW
 // ============================================================================
 
-plot(detectedWave >= 3 ? w0Price : na, "Wave 0 Price", display=display.data_window, color=na)
-plot(detectedWave >= 3 ? w1Price : na, "Wave 1 Price", display=display.data_window, color=na)
-plot(detectedWave >= 3 ? w2Price : na, "Wave 2 Price", display=display.data_window, color=na)
-plot(detectedWave >= 3 ? w3Price : na, "Wave 3 Price", display=display.data_window, color=na)
-plot(detectedWave >= 5 ? w4Price : na, "Wave 4 Price", display=display.data_window, color=na)
-plot(detectedWave >= 5 ? w5Price : na, "Wave 5 Price", display=display.data_window, color=na)
-plot(not na(entryPrice) ? entryPrice : na, "Entry Price", display=display.data_window, color=na)
-plot(not na(stopLoss) ? stopLoss : na, "Stop Loss", display=display.data_window, color=na)
-plot(not na(takeProfit) ? takeProfit : na, "Take Profit", display=display.data_window, color=na)
+plot(detectedWave >= 3 ? w0Price : na,          "Wave 0 Price",       display=display.data_window, color=na)
+plot(detectedWave >= 3 ? w1Price : na,          "Wave 1 Price",       display=display.data_window, color=na)
+plot(detectedWave >= 3 ? w2Price : na,          "Wave 2 Price",       display=display.data_window, color=na)
+plot(detectedWave >= 3 ? w3Price : na,          "Wave 3 Price",       display=display.data_window, color=na)
+plot(detectedWave >= 5 ? w4Price : na,          "Wave 4 Price",       display=display.data_window, color=na)
+plot(detectedWave >= 5 ? w5Price : na,          "Wave 5 Price",       display=display.data_window, color=na)
+plot(not na(entryPrice) ? entryPrice : na,      "Entry Price",        display=display.data_window, color=na)
+plot(not na(stopLoss)   ? stopLoss   : na,      "Stop Loss",          display=display.data_window, color=na)
+plot(not na(takeProfit) ? takeProfit : na,      "Take Profit",        display=display.data_window, color=na)
+plot(detectedWave >= 3  ? complianceScore : na, "Compliance Score %", display=display.data_window, color=na)
+plot(corrFound ? 1 : 0,                         "Correction Found",   display=display.data_window, color=na)
