@@ -11,7 +11,7 @@ Each example describes a wave pattern with:
 
 ---
 
-## Example 1: Classic Bullish Impulse (BTC Daily, 2023)
+## Example 1: Classic Bullish Impulse (BTC Daily, Historical)
 
 ### Setup
 - Timeframe: Daily chart

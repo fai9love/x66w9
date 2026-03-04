@@ -22,6 +22,19 @@ FIB_2618 = 2.618   // Golden ratio squared
 FIB_4236 = 4.236   // Rare strong extension
 MAX_PIVOTS = 50    // Maximum pivots stored in detection buffer
 
+// Corrective wave classification thresholds
+CORR_C_MIN      = 0.90   // Minimum C extension relative to A (zigzag/flat)
+FLAT_B_MIN      = 0.80   // Minimum B retracement for a flat correction
+FLAT_B_MAX      = 1.00   // Maximum B retracement for a flat correction
+
+// Partial pattern compliance estimates (used when full 5-wave not yet detected)
+PARTIAL_COMP_BOTH   = 75   // Both W2 and W3 Fibonacci valid
+PARTIAL_COMP_W2ONLY = 50   // Only W2 Fibonacci valid
+PARTIAL_COMP_LOW    = 25   // Neither Fibonacci condition met
+
+// Label anchor offset (small % nudge so signal label does not overlap price)
+LABEL_OFFSET = 0.002
+
 // ============================================================================
 // USER INPUTS
 // ============================================================================
@@ -483,11 +496,11 @@ detectCorrectiveWaves() =>
                 if wALen > 0
                     bRet = wBLen / wALen
                     cExt = wCLen / wALen
-                    if not corrFound and bRet >= (FIB_500 - tol) and bRet <= (FIB_786 + tol) and cExt >= (0.9 - tol)
+                    if not corrFound and bRet >= (FIB_500 - tol) and bRet <= (FIB_786 + tol) and cExt >= (CORR_C_MIN - tol)
                         corrFound:=true; corrType:="Zigzag"; corrBull:=false
                         cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
                         cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
-                    else if not corrFound and bRet >= (0.80 - tol) and bRet <= (1.00 + tol) and cExt >= (0.80 - tol) and cExt <= (FIB_1618 + tol)
+                    else if not corrFound and bRet >= (FLAT_B_MIN - tol) and bRet <= (FLAT_B_MAX + tol) and cExt >= (FLAT_B_MIN - tol) and cExt <= (FIB_1618 + tol)
                         corrFound:=true; corrType:="Flat"; corrBull:=false
                         cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
                         cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
@@ -500,11 +513,11 @@ detectCorrectiveWaves() =>
                 if wALen > 0
                     bRet = wBLen / wALen
                     cExt = wCLen / wALen
-                    if not corrFound and bRet >= (FIB_500 - tol) and bRet <= (FIB_786 + tol) and cExt >= (0.9 - tol)
+                    if not corrFound and bRet >= (FIB_500 - tol) and bRet <= (FIB_786 + tol) and cExt >= (CORR_C_MIN - tol)
                         corrFound:=true; corrType:="Zigzag"; corrBull:=true
                         cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
                         cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
-                    else if not corrFound and bRet >= (0.80 - tol) and bRet <= (1.00 + tol) and cExt >= (0.80 - tol) and cExt <= (FIB_1618 + tol)
+                    else if not corrFound and bRet >= (FLAT_B_MIN - tol) and bRet <= (FLAT_B_MAX + tol) and cExt >= (FLAT_B_MIN - tol) and cExt <= (FIB_1618 + tol)
                         corrFound:=true; corrType:="Flat"; corrBull:=true
                         cp0:=p0; cp1:=p1; cp2:=p2; cp3:=p3
                         cb0:=b0; cb1:=b1; cb2:=b2; cb3:=b3
@@ -548,7 +561,7 @@ if newPartial
     w2Retracement:=pW2Ret; w3Extension:=pW3Ext; w4Retracement:=na
     w2FibValid:=pW2Valid; w3FibValid:=pW3Valid; w4FibValid:=false; w5FibValid:=false
     // Partial compliance estimate based on available Fibonacci checks
-    complianceScore := pW2Valid ? (pW3Valid ? 75 : 50) : 25
+    complianceScore := pW2Valid ? (pW3Valid ? PARTIAL_COMP_BOTH : PARTIAL_COMP_W2ONLY) : PARTIAL_COMP_LOW
     violationCount  := pW2Valid ? (pW3Valid ? 0 : 1) : 2
 
 // ============================================================================
@@ -824,6 +837,12 @@ if showFibLines and (newPattern or newPartial)
             if showConfluenceZones
                 tolAmt = w1Len * confluenceTolerance
                 // Helper: draw a confluence box if two levels are within tolerance
+                // @function Draw a confluence box if two Fibonacci levels are within tolerance of each other.
+                // @param lvA      First Fibonacci level price
+                // @param lvB      Second Fibonacci level price
+                // @param startBar Left edge bar index for the confluence box
+                // @param lblA     Label text for the first level
+                // @param lblB     Label text for the second level
                 checkConfluence(lvA, lvB, startBar, lblA, lblB) =>
                     if math.abs(lvA - lvB) <= tolAmt
                         midPrice = (lvA + lvB) / 2
@@ -901,7 +920,7 @@ if (signalAtW2 or signalAtW4) and bar_index != lastSignalBar
     lSize    = getLabelSize(labelSize)
     sigColor = patternBull ? bullColor : bearColor
 
-    sigLabel := label.new(sigBar, patternBull ? entryPrice * 0.998 : entryPrice * 1.002, sigText,
+    sigLabel := label.new(sigBar, patternBull ? entryPrice * (1 - LABEL_OFFSET) : entryPrice * (1 + LABEL_OFFSET), sigText,
          style=patternBull ? label.style_label_up : label.style_label_down,
          color=color.new(sigColor,20), textcolor=color.white, size=lSize)
 
