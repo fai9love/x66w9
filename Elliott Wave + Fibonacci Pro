@@ -57,6 +57,16 @@ slColor       = input.color(color.new(#FF0000, 0), "Stop-Loss Color", group=grp_
 tpColor       = input.color(color.new(#00E676, 0), "Take-Profit Color", group=grp_vis)
 labelSize     = input.string("small", "Label Size", options=["tiny", "small", "normal", "large"], group=grp_vis)
 
+// --- Theme & Display ---
+grp_theme    = "Theme & Display"
+themeMode    = input.string("Dark", "Color Theme", options=["Dark", "Light", "High Contrast"], group=grp_theme,
+     tooltip="Dark: OLED-friendly. Light: white/bright charts. High Contrast: accessibility/color-blind safe (yellow on black).")
+panelPos     = input.string("Top Right", "Panel Position", options=["Top Right","Top Left","Bottom Right","Bottom Left"], group=grp_theme)
+showPanel    = input.bool(true, "Show Info Panel", group=grp_theme)
+compactMode  = input.bool(false, "Compact Labels (reduce clutter on small charts)", group=grp_theme)
+a11yMode     = input.bool(false, "Accessibility Color Mode (Color-Blind Safe)", group=grp_theme,
+     tooltip="Replaces red/green with blue/orange — safe for deuteranopia and protanopia.")
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -79,6 +89,32 @@ calcMA(src, len, maType) =>
         "HMA" => ta.hma(src, len)
         => ta.ema(src, len)
 
+// Theme color resolver — returns [bgCell, txtMain, txtMute, borderCol]
+getThemeColors() =>
+    switch themeMode
+        "Light"         => [color.new(#F4F4F8, 75), color.new(#1A1A2E, 0), color.new(#5A5A72, 0), color.new(#CCCCDD, 40)]
+        "High Contrast" => [color.new(#000000, 0),  color.new(#FFFF00, 0), color.new(#FFFFFF, 0), color.new(#FFFFFF, 0)]
+        =>                 [color.new(#1A1A2E, 85), color.new(#E0E0E0, 0), color.new(#7A7A8C, 0), color.new(#2E2E4E, 40)]
+
+// Accessibility directional color resolver — returns [bullC, bearC]
+getDirectionalColors() =>
+    a11yMode ? [color.new(#1A85FF, 0), color.new(#FF8C00, 0)] : [bullColor, bearColor]
+
+// Panel position resolver
+getPanelPos() =>
+    switch panelPos
+        "Top Right"    => position.top_right
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+// Signal text builder
+buildSignalText(isBull, waveNum, entry, sl, tp, rr) =>
+    dir = isBull ? "▲ LONG" : "▼ SHORT"
+    sep = "─────────────────"
+    dir + "  |  Wave " + waveNum + " Entry\n" + sep + "\nEntry  : " + str.tostring(entry, format.mintick) + "\nSL     : " + str.tostring(sl, format.mintick) + "\nTP     : " + str.tostring(tp, format.mintick) + "\n" + sep + "\nR:R    = 1 : " + str.tostring(rr, "#.00")
+
 // ============================================================================
 // HIGHER-TIMEFRAME TREND DETECTION
 // ============================================================================
@@ -95,7 +131,8 @@ isBullish = switch waveMode
     => true
 
 // Trend background
-trendBgColor = htfEnabled ? (htfTrendUp ? color.new(bullColor, 95) : color.new(bearColor, 95)) : na
+[bullC, bearC] = getDirectionalColors()
+trendBgColor = htfEnabled ? (htfTrendUp ? color.new(bullC, 95) : color.new(bearC, 95)) : na
 bgcolor(trendBgColor, title="Trend Background")
 
 // ============================================================================
@@ -518,33 +555,34 @@ if newPattern or newPartial
     while array.size(waveLabels) > 0
         label.delete(array.pop(waveLabels))
 
-    wCol = patternBull ? bullColor : bearColor
+    [bullC_w, bearC_w] = getDirectionalColors()
+    wCol = patternBull ? bullC_w : bearC_w
     lSize = getLabelSize(labelSize)
 
     // Draw Wave 0 -> 1
     array.push(waveLines, line.new(w0Bar, w0Price, w1Bar, w1Price, color=wCol, width=2))
     array.push(waveLabels, label.new(w0Bar, w0Price, "0", style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
-    array.push(waveLabels, label.new(w1Bar, w1Price, "(1)", style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+    array.push(waveLabels, label.new(w1Bar, w1Price, compactMode ? "1" : "(1)", style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
 
     // Draw Wave 1 -> 2
     array.push(waveLines, line.new(w1Bar, w1Price, w2Bar, w2Price, color=wCol, width=2))
-    fibInfo2 = w2FibValid ? "\n[v] " + str.tostring(w2Retracement * 100, "#.#") + "% ret" : ""
-    array.push(waveLabels, label.new(w2Bar, w2Price, "(2)" + fibInfo2, style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+    fibInfo2 = compactMode ? "" : (w2FibValid ? "\n[v] " + str.tostring(w2Retracement * 100, "#.#") + "% ret" : "")
+    array.push(waveLabels, label.new(w2Bar, w2Price, compactMode ? "2" : "(2)" + fibInfo2, style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
 
     // Draw Wave 2 -> 3
     array.push(waveLines, line.new(w2Bar, w2Price, w3Bar, w3Price, color=wCol, width=2))
-    fibInfo3 = w3FibValid ? "\n[v] " + str.tostring(w3Extension * 100, "#.#") + "% ext" : ""
-    array.push(waveLabels, label.new(w3Bar, w3Price, "(3)" + fibInfo3, style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+    fibInfo3 = compactMode ? "" : (w3FibValid ? "\n[v] " + str.tostring(w3Extension * 100, "#.#") + "% ext" : "")
+    array.push(waveLabels, label.new(w3Bar, w3Price, compactMode ? "3" : "(3)" + fibInfo3, style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
 
     if detectedWave >= 5 and not na(w4Bar) and not na(w5Bar)
         // Draw Wave 3 -> 4
         array.push(waveLines, line.new(w3Bar, w3Price, w4Bar, w4Price, color=wCol, width=2))
-        fibInfo4 = w4FibValid ? "\n[v] " + str.tostring(w4Retracement * 100, "#.#") + "% ret" : ""
-        array.push(waveLabels, label.new(w4Bar, w4Price, "(4)" + fibInfo4, style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+        fibInfo4 = compactMode ? "" : (w4FibValid ? "\n[v] " + str.tostring(w4Retracement * 100, "#.#") + "% ret" : "")
+        array.push(waveLabels, label.new(w4Bar, w4Price, compactMode ? "4" : "(4)" + fibInfo4, style=patternBull ? label.style_label_up : label.style_label_down, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
 
         // Draw Wave 4 -> 5
         array.push(waveLines, line.new(w4Bar, w4Price, w5Bar, w5Price, color=wCol, width=2))
-        array.push(waveLabels, label.new(w5Bar, w5Price, "(5)", style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
+        array.push(waveLabels, label.new(w5Bar, w5Price, compactMode ? "5" : "(5)", style=patternBull ? label.style_label_down : label.style_label_up, color=color.new(wCol, 80), textcolor=wCol, size=lSize))
 
 // ============================================================================
 // FIBONACCI LEVEL LINES
@@ -552,12 +590,15 @@ if newPattern or newPartial
 
 var line[] fibLines  = array.new_line(0)
 var label[] fibLabels = array.new_label(0)
+var box[] fibBoxes = array.new_box(0)
 
 if showFibLines and (newPattern or newPartial)
     while array.size(fibLines) > 0
         line.delete(array.pop(fibLines))
     while array.size(fibLabels) > 0
         label.delete(array.pop(fibLabels))
+    while array.size(fibBoxes) > 0
+        box.delete(array.pop(fibBoxes))
 
     lSize = getLabelSize(labelSize)
 
@@ -620,6 +661,21 @@ if showFibLines and (newPattern or newPartial)
                 array.push(fibLabels, label.new(rightEdge, w4_382, "38.2% W3 (W4 ideal)", style=label.style_none, textcolor=fibColor, size=lSize))
                 array.push(fibLabels, label.new(rightEdge, w4_500, "50% W3", style=label.style_none, textcolor=fibColor, size=lSize))
 
+        // Fibonacci zone boxes
+        // Wave 2 Retracement Zone (50%–78.6% of Wave 1)
+        zoneHigh2   = patternBull ? w1Price - w1Len * w2RetLow  : w1Price + w1Len * w2RetHigh
+        zoneLow2    = patternBull ? w1Price - w1Len * w2RetHigh : w1Price + w1Len * w2RetLow
+        array.push(fibBoxes, box.new(w1Bar, zoneHigh2, rightEdge, zoneLow2,
+             bgcolor=color.new(fibColor, 88), border_color=color.new(fibColor, 60),
+             border_style=line.style_dashed, border_width=1))
+
+        // Wave 3 Extension Zone (100%–161.8% extension from W2)
+        zoneTop3    = patternBull ? ext1618 : ext1000
+        zoneBottom3 = patternBull ? ext1000 : ext1618
+        array.push(fibBoxes, box.new(w1Bar, zoneTop3, rightEdge, zoneBottom3,
+             bgcolor=color.new(tpColor, 92), border_color=color.new(tpColor, 65),
+             border_style=line.style_dashed, border_width=1))
+
 // ============================================================================
 // TRADE SIGNAL GENERATION
 // ============================================================================
@@ -677,10 +733,13 @@ if (signalAtW2 or signalAtW4) and bar_index != lastSignalBar
 
     sigBar = signalAtW2 ? w2Bar : w4Bar
     waveNum = signalAtW2 ? "3" : "5"
-    sigText = (patternBull ? "^ LONG" : "v SHORT") + " | Wave " + waveNum + "\nEntry: " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(stopLoss, format.mintick) + "\nTP: " + str.tostring(takeProfit, format.mintick)
+    slDist_sig = math.abs(entryPrice - stopLoss)
+    rr_sig     = slDist_sig > 0 ? math.abs(takeProfit - entryPrice) / slDist_sig : 0.0
+    sigText    = buildSignalText(patternBull, waveNum, entryPrice, stopLoss, takeProfit, rr_sig)
 
     lSize = getLabelSize(labelSize)
-    sigColor = patternBull ? bullColor : bearColor
+    [bullC_s, bearC_s] = getDirectionalColors()
+    sigColor = patternBull ? bullC_s : bearC_s
     
     sigLabel := label.new(sigBar, patternBull ? entryPrice * 0.998 : entryPrice * 1.002, sigText,
          style=patternBull ? label.style_label_up : label.style_label_down,
@@ -706,42 +765,92 @@ alertcondition(newPattern, title="Full 5-Wave Detected", message="EW-Fib Pro: Co
 // INFO TABLE
 // ============================================================================
 
-var table infoPanel = table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 85), border_width=1, border_color=color.new(color.gray, 50))
+var table infoPanel = table.new(getPanelPos(), 3, 12, border_width=1)
 
-if barstate.islast and detectedWave >= 3
-    wDir = patternBull ? "BULLISH ^" : "BEARISH v"
-    wCol = patternBull ? bullColor : bearColor
+if barstate.islast and showPanel and detectedWave >= 3
+    [bgCell, txtMain, txtMute, borderCol] = getThemeColors()
+    [bullC_p, bearC_p] = getDirectionalColors()
+    wCol = patternBull ? bullC_p : bearC_p
+    wDir = patternBull ? "▲ BULLISH" : "▼ BEARISH"
 
-    table.cell(infoPanel, 0, 0, "Elliott Wave + Fib", text_color=color.white, text_size=size.small, bgcolor=color.new(wCol, 40))
-    table.cell(infoPanel, 1, 0, wDir, text_color=wCol, text_size=size.small, bgcolor=color.new(wCol, 80))
+    // Row 0 — Header
+    table.cell(infoPanel, 0, 0, "EW-Fib Pro", text_color=txtMain, text_size=size.small, bgcolor=color.new(wCol, 30))
+    table.cell(infoPanel, 1, 0, wDir, text_color=wCol, text_size=size.small, bgcolor=color.new(wCol, 75))
+    table.cell(infoPanel, 2, 0, "v2.0", text_color=txtMute, text_size=size.tiny, bgcolor=color.new(wCol, 85))
 
-    table.cell(infoPanel, 0, 1, "Current Wave", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 1, str.tostring(detectedWave) + " of 5", text_color=color.white, text_size=size.tiny)
+    // Row 1 — WAVE STRUCTURE section label
+    table.cell(infoPanel, 0, 1, "WAVE STRUCTURE", text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 1, "", bgcolor=bgCell)
+    table.cell(infoPanel, 2, 1, "", bgcolor=bgCell)
 
-    table.cell(infoPanel, 0, 2, "HTF Trend", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 2, htfEnabled ? (htfTrendUp ? "Bullish" : "Bearish") : "Disabled", text_color=htfEnabled ? (htfTrendUp ? bullColor : bearColor) : color.gray, text_size=size.tiny)
+    // Row 2 — Wave Progress
+    progressStr = (detectedWave >= 1 ? "█" : "░") + (detectedWave >= 2 ? "█" : "░") + (detectedWave >= 3 ? "█" : "░") + (detectedWave >= 4 ? "█" : "░") + (detectedWave >= 5 ? "█" : "░")
+    table.cell(infoPanel, 0, 2, "Progress", text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 2, progressStr, text_color=wCol, text_size=size.small, bgcolor=bgCell)
+    table.cell(infoPanel, 2, 2, str.tostring(detectedWave) + "/5", text_color=txtMain, text_size=size.tiny, bgcolor=bgCell)
 
-    table.cell(infoPanel, 0, 3, "W2 Ret.", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 3, not na(w2Retracement) ? str.tostring(w2Retracement * 100, "#.#") + "%" + (w2FibValid ? " [v]" : " [x]") : "-", text_color=w2FibValid ? bullColor : color.gray, text_size=size.tiny)
+    // Row 3 — HTF Trend
+    htfTrendStr = htfEnabled ? (htfTrendUp ? "▲ Bull" : "▼ Bear") : "— Off"
+    htfTrendCol = htfEnabled ? (htfTrendUp ? bullC_p : bearC_p) : txtMute
+    table.cell(infoPanel, 0, 3, "HTF " + htfTimeframe, text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 3, htfTrendStr, text_color=htfTrendCol, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 2, 3, "●", text_color=htfTrendCol, text_size=size.tiny, bgcolor=bgCell)
 
-    table.cell(infoPanel, 0, 4, "W3 Ext.", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 4, not na(w3Extension) ? str.tostring(w3Extension * 100, "#.#") + "%" + (w3FibValid ? " [v]" : " [x]") : "-", text_color=w3FibValid ? bullColor : color.gray, text_size=size.tiny)
+    // Row 4 — FIBONACCI section label
+    table.cell(infoPanel, 0, 4, "FIBONACCI", text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 4, "", bgcolor=bgCell)
+    table.cell(infoPanel, 2, 4, "", bgcolor=bgCell)
 
-    table.cell(infoPanel, 0, 5, "W4 Ret.", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 5, not na(w4Retracement) ? str.tostring(w4Retracement * 100, "#.#") + "%" + (w4FibValid ? " [v]" : " [x]") : "-", text_color=w4FibValid ? bullColor : color.gray, text_size=size.tiny)
+    // Row 5 — W2 Retracement
+    w2ValStr  = not na(w2Retracement) ? str.tostring(w2Retracement * 100, "#.0") + "%" + (w2FibValid ? " ✓" : " ✗") : "—"
+    w2ValCol  = not na(w2Retracement) ? (w2FibValid ? bullC_p : bearC_p) : txtMute
+    w2StatStr = not na(w2Retracement) ? (w2FibValid ? "VALID" : "WEAK") : "—"
+    w2StatCol = not na(w2Retracement) ? (w2FibValid ? bullC_p : txtMute) : txtMute
+    table.cell(infoPanel, 0, 5, "W2 Ret.", text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 5, w2ValStr, text_color=w2ValCol, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 2, 5, w2StatStr, text_color=w2StatCol, text_size=size.tiny, bgcolor=bgCell)
 
+    // Row 6 — W3 Extension
+    w3ValStr  = not na(w3Extension) ? str.tostring(w3Extension * 100, "#.0") + "%" + (w3FibValid ? " ✓" : " ✗") : "—"
+    w3ValCol  = not na(w3Extension) ? (w3FibValid ? bullC_p : bearC_p) : txtMute
+    w3StatStr = not na(w3Extension) ? (w3FibValid ? "VALID" : "WEAK") : "—"
+    w3StatCol = not na(w3Extension) ? (w3FibValid ? bullC_p : txtMute) : txtMute
+    table.cell(infoPanel, 0, 6, "W3 Ext.", text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 6, w3ValStr, text_color=w3ValCol, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 2, 6, w3StatStr, text_color=w3StatCol, text_size=size.tiny, bgcolor=bgCell)
+
+    // Row 7 — W4 Retracement
+    w4ValStr  = not na(w4Retracement) ? str.tostring(w4Retracement * 100, "#.0") + "%" + (w4FibValid ? " ✓" : " ✗") : "—"
+    w4ValCol  = not na(w4Retracement) ? (w4FibValid ? bullC_p : bearC_p) : txtMute
+    w4StatStr = not na(w4Retracement) ? (w4FibValid ? "VALID" : "WEAK") : "—"
+    w4StatCol = not na(w4Retracement) ? (w4FibValid ? bullC_p : txtMute) : txtMute
+    table.cell(infoPanel, 0, 7, "W4 Ret.", text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 7, w4ValStr, text_color=w4ValCol, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 2, 7, w4StatStr, text_color=w4StatCol, text_size=size.tiny, bgcolor=bgCell)
+
+    // Row 8 — TRADE SETUP section label
+    table.cell(infoPanel, 0, 8, "TRADE SETUP", text_color=txtMute, text_size=size.tiny, bgcolor=bgCell)
+    table.cell(infoPanel, 1, 8, "", bgcolor=bgCell)
+    table.cell(infoPanel, 2, 8, "", bgcolor=bgCell)
+
+    // Rows 9-11 — Trade info
     if not na(entryPrice)
-        table.cell(infoPanel, 0, 6, "Entry", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 6, str.tostring(entryPrice, format.mintick), text_color=color.white, text_size=size.tiny)
-        table.cell(infoPanel, 0, 7, "Stop Loss", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 7, str.tostring(stopLoss, format.mintick), text_color=slColor, text_size=size.tiny)
-        table.cell(infoPanel, 0, 8, "Take Profit", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 8, str.tostring(takeProfit, format.mintick), text_color=tpColor, text_size=size.tiny)
-
         slDist = math.abs(entryPrice - stopLoss)
         rr = slDist > 0 ? math.abs(takeProfit - entryPrice) / slDist : 0.0
-        table.cell(infoPanel, 0, 9, "Risk:Reward", text_color=color.gray, text_size=size.tiny)
-        table.cell(infoPanel, 1, 9, "1:" + str.tostring(rr, "#.##"), text_color=rr >= 2 ? bullColor : (rr >= 1 ? color.yellow : bearColor), text_size=size.tiny)
+        slPct  = entryPrice > 0 ? slDist / entryPrice : 0.0
+        rrCol  = rr >= 3 ? bullC_p : (rr >= 2 ? color.yellow : bearC_p)
+
+        table.cell(infoPanel, 0, 9,  "Entry",       text_color=txtMute,  text_size=size.tiny,  bgcolor=bgCell)
+        table.cell(infoPanel, 1, 9,  str.tostring(entryPrice, format.mintick), text_color=txtMain, text_size=size.tiny, bgcolor=bgCell)
+        table.cell(infoPanel, 2, 9,  "→",           text_color=txtMute,  text_size=size.tiny,  bgcolor=bgCell)
+
+        table.cell(infoPanel, 0, 10, "Stop Loss",   text_color=txtMute,  text_size=size.tiny,  bgcolor=bgCell)
+        table.cell(infoPanel, 1, 10, str.tostring(stopLoss, format.mintick), text_color=slColor, text_size=size.tiny, bgcolor=bgCell)
+        table.cell(infoPanel, 2, 10, str.tostring(slPct * 100, "#.0") + "%", text_color=slColor, text_size=size.tiny, bgcolor=bgCell)
+
+        table.cell(infoPanel, 0, 11, "Take Profit", text_color=txtMute,  text_size=size.tiny,  bgcolor=bgCell)
+        table.cell(infoPanel, 1, 11, str.tostring(takeProfit, format.mintick), text_color=tpColor, text_size=size.tiny, bgcolor=bgCell)
+        table.cell(infoPanel, 2, 11, "1:" + str.tostring(rr, "#.0"), text_color=rrCol, text_size=size.small, bgcolor=bgCell)
 
 // ============================================================================
 // PLOT INVISIBLE SERIES FOR DATA WINDOW
