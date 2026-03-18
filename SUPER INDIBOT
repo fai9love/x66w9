@@ -1,6 +1,39 @@
 
 
 //@version=6
+// ============================================================
+// SUPER INDIBOT — Pine Script v6
+// Version   : 2.1
+// Updated   : 2026-03-03
+//
+// DESCRIPTION:
+//   Multi-EMA ribbon indicator with automated trade management,
+//   multi-timeframe trend dashboard, and 9-symbol screener.
+//
+// COMPONENTS:
+//   1. EMA Ribbon (EMA 1–8 + Extra 200)
+//   2. Signal Detection (EMA2 × EMA8 crossover)
+//   3. Trade Manager (ATR-based TP/SL, breakeven logic)
+//   4. MTF Dashboard (5m / 15m / 30m / 1H / 4H / Daily)
+//   5. Screener (up to 9 configurable symbols)
+//
+// KNOWN LIMITS:
+//   - Max 40 request.security calls; currently using 15
+//   - max_labels_count=500, max_lines_count=500, max_boxes_count=100
+//
+// CHANGELOG:
+//   v2.1 — 2026-03-03
+//     - Fix SL label not updating on breakeven move
+//     - Fix slBox not shrinking after breakeven
+//     - Fix race condition in tradeEndFixed using pendingFreeze flag
+//     - Consolidate entry/plotEntryLevelVal into single var float entry
+//     - Fix allTPsHit defaults to false when array is empty
+//     - Cache array.get results in all loops
+//     - Guard getSymbolName against empty strings
+//     - Extract renderDashboardRow helper function
+//     - Add named color constants
+//     - Add documentation header and changelog
+// ============================================================
 indicator("SUPER INDIBOT ", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
 
 // ============================================================
@@ -61,7 +94,12 @@ symbol9 = input.symbol("NSE:ITC",       "Symbol 9", group="Screener Symbols")
 // === CONSTANTS
 // ============================================================
 // FIX #9 — Replace 3× hardcoded magic number with a single constant
-int LABEL_OFFSET = 10
+int   LABEL_OFFSET     = 10
+float BREAKEVEN_BUFFER = 0.0
+color COLOR_BULLISH    = #00ff00
+color COLOR_BEARISH    = #FF0000
+color COLOR_ENTRY      = #fff100
+color COLOR_HEADER     = #03f7ff
 
 // ============================================================
 // === EMA CALCULATIONS ===
@@ -116,11 +154,12 @@ var array<line>    tpLines           = array.new<line>()
 var line           slLine            = na
 var line           entryLine         = na
 var array<label>   rightLabels       = array.new<label>()
-var float          plotEntryLevelVal = na
+var float          entry             = na       // Fix — consolidated from plotEntryLevelVal
 var float          plotSLLevelVal    = na
 var float          plotTopTPLevelVal = na       // FIX #5 — replaces plotTP4LevelVal
 var box            tpBox             = na
 var box            slBox             = na
+var bool           pendingFreeze     = false   // Fix — defers trade-end freeze by one bar
 
 atr = ta.atr(atrLen)
 
@@ -162,8 +201,9 @@ if longSignal or shortSignal
     tradeActive    := true
     tradeEndX      := na
     tradeEndFixed  := false   // FIX #7 — reset end-fix flag for new trade
+    pendingFreeze  := false   // Fix — clear any pending freeze from previous trade
     tradeDirection := longSignal ? 1 : -1
-    entry           = close
+    entry          := close   // Fix — var float entry replaces plotEntryLevelVal
     currentSLLevel := entry - tradeDirection * atr * atrrMultiplier
 
     array.clear(currentTPLevels)
@@ -173,7 +213,6 @@ if longSignal or shortSignal
         array.push(currentTPLevels, tp)
         array.push(tpHitStatus, false)
 
-    plotEntryLevelVal := entry
     plotSLLevelVal    := currentSLLevel
 
     // FIX #5 — Always use the highest available TP (last element), regardless of tpCount
@@ -194,20 +233,20 @@ if longSignal or shortSignal
     if showTP_SL_Lines
         entryRightLabel = label.new(xRightInitial, entry,
              "ENTRY " + str.tostring(entry, format.mintick),
-             style=label.style_label_left, color=#fff100, textcolor=color.black, size=size.normal)
+             style=label.style_label_left, color=COLOR_ENTRY, textcolor=color.black, size=size.normal)
         array.push(rightLabels, entryRightLabel)
         entryLine := line.new(bar_index, entry, xRightInitial, entry,
-             color=#fff100, style=line.style_solid, width=2)
+             color=COLOR_ENTRY, style=line.style_solid, width=2)
 
         for i = 0 to array.size(currentTPLevels) - 1
             yVal    = array.get(currentTPLevels, i)
             tpLine  = line.new(bar_index, yVal, xRightInitial, yVal,
-                 color=#00ff00, style=line.style_solid, width=2)
+                 color=COLOR_BULLISH, style=line.style_solid, width=2)
             array.push(tpLines, tpLine)
 
             tpLabelText  = "TP " + str.tostring(i + 1) + " : " + str.tostring(yVal, format.mintick)
             tpRightLabel = label.new(xRightInitial, yVal, tpLabelText,
-                 style=label.style_label_left, color=#00ff00, textcolor=color.black, size=size.normal)
+                 style=label.style_label_left, color=COLOR_BULLISH, textcolor=color.black, size=size.normal)
             array.push(rightLabels, tpRightLabel)
 
         slLine := line.new(bar_index, currentSLLevel, xRightInitial, currentSLLevel,
@@ -249,16 +288,18 @@ if tradeActive and showTP_SL_Lines
             line.set_x2(entryLine, xRightCurrent)
 
         for i = 0 to array.size(tpLines) - 1
-            if not na(array.get(tpLines, i))
-                line.set_x2(array.get(tpLines, i), xRightCurrent)
+            tpLineObj = array.get(tpLines, i)
+            if not na(tpLineObj)
+                line.set_x2(tpLineObj, xRightCurrent)
 
         if not na(slLine)
             line.set_x2(slLine, xRightCurrent)
 
         if array.size(rightLabels) > 0
             for i = 0 to array.size(rightLabels) - 1
-                if not na(array.get(rightLabels, i))
-                    label.set_x(array.get(rightLabels, i), xRightCurrent)
+                lblObj = array.get(rightLabels, i)
+                if not na(lblObj)
+                    label.set_x(lblObj, xRightCurrent)
 
         if not na(tpBox)
             box.set_right(tpBox, xRightCurrent)
@@ -268,7 +309,7 @@ if tradeActive and showTP_SL_Lines
     // --- SL / TP Hit Detection (runs every bar) ---
     slHit = (tradeDirection > 0 and low <= currentSLLevel) or (tradeDirection < 0 and high >= currentSLLevel)
 
-    bool allTPsHit = true
+    bool allTPsHit = array.size(currentTPLevels) > 0
     for i = 0 to array.size(currentTPLevels) - 1
         tpLevel = array.get(currentTPLevels, i)
         if i < array.size(tpHitStatus)
@@ -284,48 +325,63 @@ if tradeActive and showTP_SL_Lines
 
     // FIX #11 — Move SL to breakeven once TP1 is hit
     if array.size(tpHitStatus) > 0 and array.get(tpHitStatus, 0)
-        if (tradeDirection > 0 and currentSLLevel < plotEntryLevelVal) or (tradeDirection < 0 and currentSLLevel > plotEntryLevelVal)
-            currentSLLevel := plotEntryLevelVal
+        if (tradeDirection > 0 and currentSLLevel < entry) or (tradeDirection < 0 and currentSLLevel > entry)
+            currentSLLevel := entry
             if not na(slLine)
                 line.set_y1(slLine, currentSLLevel)
                 line.set_y2(slLine, currentSLLevel)
+            // Fix — Update SL right label text and y position on breakeven move
+            for labelIdx = 0 to array.size(rightLabels) - 1
+                lbl = array.get(rightLabels, labelIdx)
+                if not na(lbl)
+                    if str.contains(label.get_text(lbl), "SL")
+                        label.set_y(lbl, currentSLLevel)
+                        label.set_text(lbl, "SL (BE) : " + str.tostring(currentSLLevel, format.mintick))
+            // Fix — Update slBox after breakeven move
+            if not na(slBox)
+                box.set_top(slBox,    math.max(entry, currentSLLevel))
+                box.set_bottom(slBox, math.min(entry, currentSLLevel))
 
     // FIX #12 — Visually fade TP lines that have been hit
     for i = 0 to array.size(tpLines) - 1
-        if not na(array.get(tpLines, i))
+        tpLineObj = array.get(tpLines, i)
+        if not na(tpLineObj)
             isHit    = i < array.size(tpHitStatus) and array.get(tpHitStatus, i)
-            tpColor  = isHit ? color.new(color.green, 65) : color.new(#00ff00, 0)
-            line.set_color(array.get(tpLines, i), tpColor)
+            tpColor  = isHit ? color.new(color.green, 65) : COLOR_BULLISH
+            line.set_color(tpLineObj, tpColor)
 
     if slHit or allTPsHit
-        tradeActive := false
-        tradeEndX   := bar_index
+        tradeActive   := false
+        tradeEndX     := bar_index
+        pendingFreeze := true   // Fix — signal freeze for next bar (avoids same-bar race)
 
-// FIX #7 — End-of-trade freeze: runs only ONCE using tradeEndFixed flag
-if not tradeActive and not na(tradeEndX) and not tradeEndFixed and showTP_SL_Lines
+// Fix — End-of-trade freeze: pendingFreeze defers by one bar; tradeEndFixed prevents re-runs
+if pendingFreeze and not tradeEndFixed and showTP_SL_Lines
+    pendingFreeze := false
+    tradeEndFixed := true
     int fixedXRight = tradeEndX + LABEL_OFFSET  // FIX #9
 
     if not na(entryLine)
         line.set_x2(entryLine, fixedXRight)
 
     for i = 0 to array.size(tpLines) - 1
-        if not na(array.get(tpLines, i))
-            line.set_x2(array.get(tpLines, i), fixedXRight)
+        tpLineObj = array.get(tpLines, i)
+        if not na(tpLineObj)
+            line.set_x2(tpLineObj, fixedXRight)
 
     if not na(slLine)
         line.set_x2(slLine, fixedXRight)
 
     if array.size(rightLabels) > 0
         for i = 0 to array.size(rightLabels) - 1
-            if not na(array.get(rightLabels, i))
-                label.set_x(array.get(rightLabels, i), fixedXRight)
+            lblObj = array.get(rightLabels, i)
+            if not na(lblObj)
+                label.set_x(lblObj, fixedXRight)
 
     if not na(tpBox)
         box.set_right(tpBox, fixedXRight)
     if not na(slBox)
         box.set_right(slBox, fixedXRight)
-
-    tradeEndFixed := true   // FIX #7 — prevent this block from running again
 
 // ============================================================
 // === ALERT CONDITIONS ===
@@ -349,8 +405,11 @@ getTablePosition(pos) =>
         =>               position.top_right
 
 getSymbolName(fullSymbol) =>
-    parts = str.split(fullSymbol, ":")
-    array.size(parts) > 1 ? array.get(parts, 1) : fullSymbol
+    if str.length(fullSymbol) == 0
+        "N/A"
+    else
+        parts = str.split(fullSymbol, ":")
+        array.size(parts) > 1 ? array.get(parts, 1) : fullSymbol
 
 // FIX #4 — Multi-timeframe trend helper: returns bullish bool for a given TF string
 // Avoids duplicating switch blocks for each of the 3 combined-trend inputs
@@ -363,6 +422,13 @@ getTFBullish(tfString, e2_5, e8_5, e2_15, e8_15, e2_30, e8_30, e2_60, e8_60, e2_
         "240" => e8_240 < e2_240   // FIX #4 — "240" now handled
         "D"   => e8_D   < e2_D
         =>       false
+
+// Refactor — Eliminates repeated table.cell pairs for dashboard timeframe rows
+renderDashboardRow(tbl, rowIdx, rowLabel, isBull) =>
+    rowColor  = isBull ? COLOR_BULLISH : COLOR_BEARISH
+    statusTxt = isBull ? "Bullish" : "Bearish"
+    table.cell(tbl, 0, rowIdx, rowLabel,   text_color=color.black, bgcolor=COLOR_HEADER, text_size=size.small)
+    table.cell(tbl, 1, rowIdx, statusTxt,  text_color=color.black, bgcolor=rowColor,     text_size=size.small)
 
 // ============================================================
 // === SCREENER — SECURITY REQUESTS ===
@@ -431,7 +497,7 @@ var table screenerTable = table.new(getTablePosition(screenerPosition), 2, maxSy
 
 if showScreener and barstate.islast
     table.cell(screenerTable, 0, 0, "SCREENER",
-         text_color=color.black, bgcolor=#03f7ff,
+         text_color=color.black, bgcolor=COLOR_HEADER,
          text_size=size.small, text_halign=text.align_center)
     table.merge_cells(screenerTable, 0, 0, 1, 0)
 
@@ -465,11 +531,11 @@ if showScreener and barstate.islast
         signalStatus = longCross  ? "Long"    :
                        shortCross ? "Short"   :
                        symIsBullish ? "Bullish" : "Bearish"
-        signalColor  = longCross  ? color.new(#00ff00, 0) :
+        signalColor  = longCross  ? COLOR_BULLISH :
                        shortCross ? color.new(#ff0000, 0) :
                        symIsBullish ? color.new(#ffff00, 0) : color.new(#ff6600, 0)
 
-        table.cell(screenerTable, 0, i + 1, symbolName,    text_color=color.black, bgcolor=#03f7ff,    text_size=size.small)
+        table.cell(screenerTable, 0, i + 1, symbolName,    text_color=color.black, bgcolor=COLOR_HEADER,    text_size=size.small)
         table.cell(screenerTable, 1, i + 1, signalStatus,  text_color=color.black, bgcolor=signalColor, text_size=size.small)
 
 // ============================================================
@@ -484,7 +550,7 @@ var table dashboardTable = table.new(getTablePosition(dashboardPosition), 2, 8,
 
 if showDashboard and barstate.islast
     table.cell(dashboardTable, 0, 0, "TREND ANALYSIS",
-         text_color=color.black, bgcolor=#03f7ff,
+         text_color=color.black, bgcolor=COLOR_HEADER,
          text_size=size.small, text_halign=text.align_center)
     table.merge_cells(dashboardTable, 0, 0, 1, 0)
 
@@ -503,10 +569,10 @@ if showDashboard and barstate.islast
     bullishCount     = (tf1Bullish ? 1 : 0) + (tf2Bullish ? 1 : 0) + (tf3Bullish ? 1 : 0)
     isOverallBullish = bullishCount >= 2
     combinedStatus   = isOverallBullish ? "Bullish" : "Bearish"
-    combinedColor    = isOverallBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
+    combinedColor    = isOverallBullish ? COLOR_BULLISH : COLOR_BEARISH
 
     // FIX #10 — All text_color uses color.black consistently
-    table.cell(dashboardTable, 0, 1, "Status",        text_color=color.black, bgcolor=#03f7ff,      text_size=size.small)
+    table.cell(dashboardTable, 0, 1, "Status",        text_color=color.black, bgcolor=COLOR_HEADER,      text_size=size.small)
     table.cell(dashboardTable, 1, 1, combinedStatus,  text_color=color.black, bgcolor=combinedColor, text_size=size.small)
 
     // Individual timeframe rows
@@ -517,35 +583,10 @@ if showDashboard and barstate.islast
     tf4HourBullish = tf240_ema8 < tf240_ema2  // FIX #13 — 4-Hour row added
     tfDailyBullish = tfD_ema8   < tfD_ema2
 
-    status5Min  = tf5MinBullish  ? "Bullish" : "Bearish"
-    status15Min = tf15MinBullish ? "Bullish" : "Bearish"
-    status30Min = tf30MinBullish ? "Bullish" : "Bearish"
-    status1Hour = tf1HourBullish ? "Bullish" : "Bearish"
-    status4Hour = tf4HourBullish ? "Bullish" : "Bearish"  // FIX #13
-    statusDaily = tfDailyBullish ? "Bullish" : "Bearish"
-
-    color5Min  = tf5MinBullish  ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color15Min = tf15MinBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color30Min = tf30MinBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color1Hour = tf1HourBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-    color4Hour = tf4HourBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)  // FIX #13
-    colorDaily = tfDailyBullish ? color.new(#00ff00, 0) : color.new(#FF0000, 0)
-
-    table.cell(dashboardTable, 0, 2, "5 Min",  text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 2, status5Min,  text_color=color.black, bgcolor=color5Min,  text_size=size.small)
-
-    table.cell(dashboardTable, 0, 3, "15 Min", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 3, status15Min, text_color=color.black, bgcolor=color15Min, text_size=size.small)
-
-    table.cell(dashboardTable, 0, 4, "30 Min", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 4, status30Min, text_color=color.black, bgcolor=color30Min, text_size=size.small)
-
-    table.cell(dashboardTable, 0, 5, "1 Hour", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 5, status1Hour, text_color=color.black, bgcolor=color1Hour, text_size=size.small)
-
-    // FIX #13 — 4-Hour row (row 6); Daily shifted to row 7
-    table.cell(dashboardTable, 0, 6, "4 Hour", text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 6, status4Hour, text_color=color.black, bgcolor=color4Hour, text_size=size.small)
-
-    table.cell(dashboardTable, 0, 7, "Daily",  text_color=color.black, bgcolor=#03f7ff,   text_size=size.small)
-    table.cell(dashboardTable, 1, 7, statusDaily, text_color=color.black, bgcolor=colorDaily, text_size=size.s
+    // Refactor — renderDashboardRow replaces 6 pairs of repeated table.cell calls
+    renderDashboardRow(dashboardTable, 2, "5 Min",  tf5MinBullish)
+    renderDashboardRow(dashboardTable, 3, "15 Min", tf15MinBullish)
+    renderDashboardRow(dashboardTable, 4, "30 Min", tf30MinBullish)
+    renderDashboardRow(dashboardTable, 5, "1 Hour", tf1HourBullish)
+    renderDashboardRow(dashboardTable, 6, "4 Hour", tf4HourBullish)  // FIX #13
+    renderDashboardRow(dashboardTable, 7, "Daily",  tfDailyBullish)
