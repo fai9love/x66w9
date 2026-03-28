@@ -366,26 +366,26 @@ getTFBullish(tfString, e2_5, e8_5, e2_15, e8_15, e2_30, e8_30, e2_60, e8_60, e2_
 
 // ============================================================
 // === SCREENER — SECURITY REQUESTS ===
-// FIX #4 — Use tuple request.security to halve call count (18 → 9)
+// v6 FIX — Split into individual request.security calls (tuples not supported in v6)
 // ============================================================
-[sym1_ema2, sym1_ema8] = request.security(symbol1, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym2_ema2, sym2_ema8] = request.security(symbol2, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym3_ema2, sym3_ema8] = request.security(symbol3, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym4_ema2, sym4_ema8] = request.security(symbol4, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym5_ema2, sym5_ema8] = request.security(symbol5, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym6_ema2, sym6_ema8] = request.security(symbol6, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym7_ema2, sym7_ema8] = request.security(symbol7, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym8_ema2, sym8_ema8] = request.security(symbol8, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[sym9_ema2, sym9_ema8] = request.security(symbol9, timeframe.period,
-     [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
+sym1_ema2 = request.security(symbol1, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym1_ema8 = request.security(symbol1, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym2_ema2 = request.security(symbol2, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym2_ema8 = request.security(symbol2, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym3_ema2 = request.security(symbol3, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym3_ema8 = request.security(symbol3, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym4_ema2 = request.security(symbol4, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym4_ema8 = request.security(symbol4, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym5_ema2 = request.security(symbol5, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym5_ema8 = request.security(symbol5, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym6_ema2 = request.security(symbol6, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym6_ema8 = request.security(symbol6, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym7_ema2 = request.security(symbol7, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym7_ema8 = request.security(symbol7, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym8_ema2 = request.security(symbol8, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym8_ema8 = request.security(symbol8, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+sym9_ema2 = request.security(symbol9, timeframe.period, ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+sym9_ema8 = request.security(symbol9, timeframe.period, ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
 
 // FIX #2 — Crossovers calculated from the fetched series (strict: only fires on cross bar)
 sym1_longCross  = ta.crossover(sym1_ema2, sym1_ema8)
@@ -409,16 +409,22 @@ sym9_shortCross = ta.crossover(sym9_ema8, sym9_ema2)
 
 // ============================================================
 // === MULTI-TIMEFRAME DATA — Dashboard ===
-// FIX #4 — Use tuple requests: 10 calls → 5 calls + 1 new for 240
+// v6 FIX — Split into individual request.security calls (tuples not supported in v6)
 // ============================================================
-[tf5_ema2,   tf5_ema8]   = request.security(syminfo.tickerid, "5",   [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[tf15_ema2,  tf15_ema8]  = request.security(syminfo.tickerid, "15",  [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[tf30_ema2,  tf30_ema8]  = request.security(syminfo.tickerid, "30",  [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[tf60_ema2,  tf60_ema8]  = request.security(syminfo.tickerid, "60",  [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
-[tf240_ema2, tf240_ema8] = request.security(syminfo.tickerid, "240", [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)  // FIX #4, #13
-[tfD_ema2,   tfD_ema8]   = request.security(syminfo.tickerid, "D",   [ta.ema(close, ema2Len), ta.ema(close, ema8Len)], lookahead=barmerge.lookahead_off)
+tf5_ema2   = request.security(syminfo.tickerid, "5",   ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+tf5_ema8   = request.security(syminfo.tickerid, "5",   ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+tf15_ema2  = request.security(syminfo.tickerid, "15",  ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+tf15_ema8  = request.security(syminfo.tickerid, "15",  ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+tf30_ema2  = request.security(syminfo.tickerid, "30",  ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+tf30_ema8  = request.security(syminfo.tickerid, "30",  ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+tf60_ema2  = request.security(syminfo.tickerid, "60",  ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+tf60_ema8  = request.security(syminfo.tickerid, "60",  ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+tf240_ema2 = request.security(syminfo.tickerid, "240", ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+tf240_ema8 = request.security(syminfo.tickerid, "240", ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
+tfD_ema2   = request.security(syminfo.tickerid, "D",   ta.ema(close, ema2Len), lookahead=barmerge.lookahead_off)
+tfD_ema8   = request.security(syminfo.tickerid, "D",   ta.ema(close, ema8Len), lookahead=barmerge.lookahead_off)
 
-// Total request.security calls: 9 (screener) + 6 (MTF) = 15  (was 28 — saved 13 calls)
+// Total request.security calls: 18 (screener) + 12 (MTF) = 30  (tuples split for v6 compatibility)
 
 // ============================================================
 // === SCREENER TABLE ===
